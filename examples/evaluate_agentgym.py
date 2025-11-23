@@ -2,30 +2,19 @@ import asyncio
 import os
 import sys
 import affinetes as af_env
-from dotenv import load_dotenv
-load_dotenv(override=True)
 
 async def main():
     agentgym_type = "textcraft-v2"
-
-    api_key = os.getenv("CHUTES_API_KEY")
-    if not api_key:
-        print("   ❌ CHUTES_API_KEY environment variable not set")
-        print("   Please set: export CHUTES_API_KEY='your-key'")
-        print("   Or create .env file with: CHUTES_API_KEY=your-key")
-        sys.exit(1)
-
     env = af_env.load_env(
         image=f"bignickeye/agentgym:{agentgym_type}",
-        mode="docker",
-        env_vars={"CHUTES_API_KEY": api_key},
         pull=True,
+        cleanup=False,
     )
 
     print("\nRunning evaluation...")
     result = await env.evaluate(
-        model="deepseek-ai/DeepSeek-V3",
-        base_url="https://llm.chutes.ai/v1",
+        model="openai/gpt-oss-20b",
+        base_url="http://172.17.0.2:30000",
         temperature=0.7,
         task_id=10,
         max_round=10,

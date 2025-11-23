@@ -22,7 +22,7 @@ async def main():
     print("\n1. Loading environment from pre-built image 'affine:latest'...")
     
     env = af_env.load_env(
-        image="bignickeye/affine:v2",
+        image="bignickeye/affine:v3",
         mode="docker",
         env_vars={"CHUTES_API_KEY": api_key},
         pull=True

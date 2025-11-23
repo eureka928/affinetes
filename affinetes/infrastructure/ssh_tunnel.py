@@ -133,16 +133,43 @@ class SSHTunnelManager:
         except Exception as e:
             logger.error(f"Tunnel thread error: {e}")
     
+    def _resolve_container_ip(self, container_name: str) -> str:
+        """
+        Resolve container name to IP via SSH command
+        
+        Args:
+            container_name: Container name
+            
+        Returns:
+            Container IP address
+        """
+        try:
+            # Execute docker inspect command on remote host
+            cmd = f"docker inspect -f '{{{{range .NetworkSettings.Networks}}}}{{{{.IPAddress}}}}{{{{end}}}}' {container_name}"
+            stdin, stdout, stderr = self._ssh_client.exec_command(cmd)
+            
+            ip = stdout.read().decode().strip()
+            error = stderr.read().decode().strip()
+            
+            if error or not ip:
+                raise BackendError(f"Failed to resolve container '{container_name}': {error or 'no IP found'}")
+            
+            logger.debug(f"Resolved container '{container_name}' to IP: {ip}")
+            return ip
+            
+        except Exception as e:
+            raise BackendError(f"Failed to resolve container IP: {e}")
+    
     def create_tunnel(
         self,
-        remote_ip: str,
+        remote_host: str,
         remote_port: int
     ) -> Tuple[str, int]:
         """
         Create SSH port forward from local to remote
         
         Args:
-            remote_ip: Remote container IP (e.g., "172.17.0.4")
+            remote_host: Remote container name or IP (e.g., "affine-latest" or "172.17.0.4")
             remote_port: Remote container port (e.g., 8000)
             
         Returns:
@@ -155,6 +182,14 @@ class SSHTunnelManager:
             try:
                 # Connect SSH
                 self._connect_ssh()
+                
+                # Resolve container name to IP if needed
+                # If remote_host looks like a container name (no dots), resolve it
+                if '.' not in remote_host:
+                    logger.debug(f"Resolving container name '{remote_host}' to IP")
+                    remote_ip = self._resolve_container_ip(remote_host)
+                else:
+                    remote_ip = remote_host
                 
                 # Find available local port
                 self._local_port = find_free_port()
@@ -181,7 +216,7 @@ class SSHTunnelManager:
                 
                 logger.info(
                     f"SSH tunnel established: localhost:{self._local_port} -> "
-                    f"{remote_ip}:{remote_port}"
+                    f"{remote_ip}:{remote_port} (container: {remote_host})"
                 )
                 
                 return ("127.0.0.1", self._local_port)

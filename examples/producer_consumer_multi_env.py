@@ -23,6 +23,9 @@ import os
 import sys
 from dotenv import load_dotenv
 
+from affinetes.utils.logger import Logger
+Logger.set_level("DEBUG")
+
 load_dotenv(override=True)
 
 
@@ -51,8 +54,8 @@ class TaskResult:
 
 
 # Environment configurations
-AFFINE_TASKS = ["sat", "abd", "ded"]
-AGENTGYM_ENVS = ["webshop", "alfworld", "babyai", "sciworld", "textcraft"]
+AFFINE_TASKS = ["sat"]
+AGENTGYM_ENVS = ["babyai"]
 
 
 def generate_hosts(replicas_per_host: int) -> tuple[int, list]:
@@ -110,7 +113,7 @@ def create_env_configs():
     configs = {
         "affine": {
             "path": "environments/affine",
-            "image": "bignickeye/affine:latest",
+            "image": "bignickeye/affine:v3",
             "replicas": affine_total,
             "hosts": affine_hosts,
         }
@@ -208,6 +211,7 @@ def generate_task(task_id: int) -> Task:
             "model": "deepseek-ai/DeepSeek-V3.1",
             "base_url": "https://llm.chutes.ai/v1",
             "timeout": 120,
+            "task_id": random.randint(0, 100),
         }
     else:
         env_type = task_name
@@ -254,27 +258,9 @@ async def execute_task(task: Task, env_pool: Dict[str, Any]) -> TaskResult:
 
         # Extract relevant information
         execution_time = time.time() - start
-
-        # Parse result based on environment type
-        if task.env_type == "affine":
-            score = result.get("total_score", 0.0)
-
-            # Get interaction sample from first detail
-            interaction_sample = None
-            details = result.get("details", [])
-            if details:
-                first_detail = details[0]
-                exp = first_detail.get("experiences", {})
-                prompt = exp.get("challenge", "")[:100]
-                response = (exp.get("llm_response") or "")[:100]
-                interaction_sample = f"Q: {prompt}... A: {response}..."
-        else:
-            # AgentGym result format
-            score = result.get("total_score", 0.0)
-
-            # Get interaction sample
-            details = result.get("details", [{}])
-            interaction_sample = str(details[0].get("experiences", []))[:100]
+        details = result.get("extra", [])
+        interaction_sample = f"{str(details)[:100]}..."
+        score = result.get("score")
 
         return TaskResult(
             task_id=task.task_id,
@@ -380,7 +366,7 @@ async def main():
 
     # Configuration
     NUM_TASKS = 50
-    MAX_CONCURRENCY = 10  # Number of concurrent task executions
+    MAX_CONCURRENCY = 2  # Number of concurrent task executions
 
     # Step 1: Load environments
     env_pool = load_environments()
