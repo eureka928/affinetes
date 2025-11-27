@@ -63,6 +63,7 @@ async def run_environment(
             container_name=name,
             env_vars=env_vars,
             cleanup=False,
+            force_recreate=True,
             pull=pull,
             mem_limit=mem_limit
         )
