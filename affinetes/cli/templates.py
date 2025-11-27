@@ -12,8 +12,6 @@ class Actor:
     def __init__(self):
         """Initialize actor with environment variables"""
         self.api_key = os.getenv("API_KEY")
-        if not self.api_key:
-            raise ValueError("API_KEY environment variable not set")
     
     async def process(self, data: dict) -> dict:
         """
