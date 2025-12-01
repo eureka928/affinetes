@@ -3,6 +3,7 @@ FROM python:3.12-slim
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -13,5 +14,8 @@ COPY . /app/
 
 # Install Python dependencies if requirements.txt exists
 RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi
+
+# Pre-download HuggingFace dataset during build to avoid runtime downloads
+RUN python3 -c "from datasets import load_dataset; load_dataset('satpalsr/rl-python', split='train')"
 
 # HTTP server will be injected by affinetes framework

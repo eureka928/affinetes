@@ -5,7 +5,7 @@ import asyncio
 import logging
 from typing import Any, Dict
 from executor import ProgramExecutor
-from dataset import R2Dataset
+from dataset import HFDataset
 from models import Challenge
 
 # Logger
@@ -42,14 +42,14 @@ class DEDTask:
         Initialize DED task.
         
         Args:
-            dataset: Optional pre-initialized R2Dataset instance to use
-            dataset_name: Name of the R2 dataset to use (only if dataset not provided)
+            dataset: Optional pre-initialized HFDataset instance to use
+            dataset_name: Name of the HuggingFace dataset to use (only if dataset not provided)
         """
         self._executor = ProgramExecutor()
-        self._dataset = dataset if dataset is not None else R2Dataset(dataset_name=dataset_name)
+        self._dataset = dataset if dataset is not None else HFDataset(dataset_name=dataset_name, split="train", preload=False)
 
     async def generate(self, task_id: int = None) -> Challenge:
-        """Generate a coding challenge from R2 dataset
+        """Generate a coding challenge from HuggingFace dataset
         
         Args:
             task_id: Optional task ID for deterministic sample selection.

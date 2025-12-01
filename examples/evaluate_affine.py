@@ -20,12 +20,17 @@ async def main():
         sys.exit(1)
 
     print("\n1. Loading environment from pre-built image 'affine:latest'...")
+    # af_env.build_image_from_env(
+    #     env_path="environments/affine",
+    #     image_tag="affine:v4",
+    # )
     
     env = af_env.load_env(
-        image="bignickeye/affine:v3",
+        image="bignickeye/affine:v4",
         mode="docker",
         env_vars={"CHUTES_API_KEY": api_key},
-        pull=True
+        pull=True,
+        cleanup=False,
     )
     print("   ✓ Environment loaded (container started with HTTP server)")
 
@@ -36,7 +41,7 @@ async def main():
         print("\n3. Running evaluation in container (async)...")
         result = await env.evaluate(
             task_type="abd",
-            task_id=240,
+            task_id=23302,
             model="deepseek-ai/DeepSeek-V3.1",
             base_url="https://llm.chutes.ai/v1"
         )

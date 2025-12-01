@@ -15,10 +15,14 @@ if '/app' not in sys.path:
 from sat import SATTask
 from abd import ABDTask
 from ded import DEDTask
-from dataset import R2Dataset
+from dataset import HFDataset
 
-# Global R2Dataset instance - created on module import to trigger background download
-_global_dataset = R2Dataset(dataset_name="satpalsr/rl-python")
+# Global HFDataset instance - created on module import to preload dataset
+_global_dataset = HFDataset(
+    dataset_name="AffineFoundation/rl-python",
+    split="train",
+    preload=False
+)
 
 class Actor:
     """Multi-task evaluation actor"""
