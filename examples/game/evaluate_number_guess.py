@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""
+Evaluate Number Guessing interactive environment
+
+Usage:
+    python evaluate_number_guess.py
+"""
 
 import asyncio
 import json
@@ -16,16 +22,19 @@ async def main():
         sys.exit(1)
 
     image_tag = af.build_image_from_env(
-        env_path="environments/primeintellect/lgc",
-        image_tag="logic:latest"
+        env_path="environments/game/number_guess",
+        image_tag="game:guess",
+        quiet=False
     )
     
+    print("Loading environment...")
     env = af.load_env(
         image=image_tag,
         mode="docker",
-        env_vars={"CHUTES_API_KEY": api_key}
+        env_vars={"CHUTES_API_KEY": api_key},
     )
-
+    print("Environment loaded\n")
+    
     result = await env.evaluate(
         model="deepseek-ai/DeepSeek-V3",
         base_url="https://llm.chutes.ai/v1",
@@ -33,6 +42,7 @@ async def main():
     )
     
     print(json.dumps(result, indent=2, ensure_ascii=False))
+    
 
 if __name__ == "__main__":
     asyncio.run(main())
