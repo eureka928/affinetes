@@ -20,31 +20,19 @@ class Actor:
     
     def __init__(
         self,
-        api_key: str = None,
-        judge_model: str = None,
-        judge_base_url: str = None,
-        judge_api_key: str = None
+        api_key: str = None
     ):
         """
-        Initialize Actor with API key and judge configuration
+        Initialize Actor with API key
         
         Args:
             api_key: API key for LLM service. If not provided, will use CHUTES_API_KEY env var
-            judge_model: Judge model for LLM-based evaluation
-            judge_base_url: Base URL for judge API
-            judge_api_key: API key for judge model
         """
         self.api_key = api_key or os.getenv("CHUTES_API_KEY")
-        self.judge_model = judge_model
-        self.judge_base_url = judge_base_url
-        self.judge_api_key = judge_api_key
         
-        # Initialize math task instance
-        self.math_task = MathTask(
-            judge_model=self.judge_model,
-            judge_base_url=self.judge_base_url,
-            judge_api_key=self.judge_api_key
-        )
+        # Initialize math task instance once to avoid reloading dataset
+        # Judge configuration will be passed per-evaluation
+        self.math_task = MathTask()
     
     async def _llm_chat(self, prompt, model, base_url, timeout, temperature, current_api_key, seed=None):
         """Call LLM API with specified API key and optional seed"""
@@ -92,7 +80,10 @@ class Actor:
         temperature=0.7,
         api_key: str = None,
         seed: int = None,
-        task_id: int = None
+        task_id: int = None,
+        judge_model: str = "deepseek-ai/DeepSeek-V3.2-Speciale",
+        judge_base_url: str = "https://llm.chutes.ai/v1",
+        judge_api_key: str = None
     ):
         """
         Run evaluation on a single math task
@@ -107,6 +98,9 @@ class Actor:
             task_id: Optional task ID for deterministic task selection.
                      If provided, used as index into dataset.
                      If not provided, random sample is selected.
+            judge_model: Judge model for LLM-based evaluation. Defaults to "deepseek-ai/DeepSeek-V3.2-Speciale"
+            judge_base_url: Base URL for judge API. Defaults to "https://llm.chutes.ai/v1"
+            judge_api_key: API key for judge model. Defaults to self.api_key
         """
         # Generate random seed if not provided
         if seed is None:
@@ -114,6 +108,9 @@ class Actor:
 
         # Allow per-call api_key override
         current_api_key = api_key or self.api_key
+
+        if judge_api_key is None:
+            judge_api_key = self.api_key
         
         start = time.time()
         
@@ -129,10 +126,16 @@ class Actor:
             resp = None
             error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
         
-        # Evaluate
+        # Evaluate with judge configuration
         score = 0.0
         if resp:
-            score = await self.math_task.evaluate(resp, challenge)
+            score = await self.math_task.evaluate(
+                resp,
+                challenge,
+                judge_model=judge_model,
+                judge_base_url=judge_base_url,
+                judge_api_key=judge_api_key
+            )
 
         conversation = [
             {"role": "user", "content": challenge.prompt},

@@ -29,7 +29,9 @@ async def main():
     result = await env.evaluate(
         model="deepseek-ai/DeepSeek-V3",
         base_url="https://llm.chutes.ai/v1",
-        task_id=100
+        task_id=50,
+        judge_model="deepseek-ai/DeepSeek-V3.2-Speciale",
+        judge_base_url="https://llm.chutes.ai/v1",
     )
     
     print(json.dumps(result, indent=2, ensure_ascii=False))

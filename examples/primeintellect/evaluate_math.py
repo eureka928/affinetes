@@ -23,13 +23,17 @@ async def main():
     env = af.load_env(
         image=image_tag,
         mode="docker",
-        env_vars={"CHUTES_API_KEY": api_key}
+        env_vars={"CHUTES_API_KEY": api_key},
+        cleanup=False,
+        force_recreate=True,
     )
 
     result = await env.evaluate(
         model="deepseek-ai/DeepSeek-V3",
         base_url="https://llm.chutes.ai/v1",
-        task_id=42
+        task_id=111,
+        judge_model="deepseek-ai/DeepSeek-V3.2-Speciale",
+        judge_base_url="https://llm.chutes.ai/v1",
     )
     
     print(json.dumps(result, indent=2, ensure_ascii=False))

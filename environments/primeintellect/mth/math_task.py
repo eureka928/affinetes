@@ -281,13 +281,23 @@ class MathTask:
             }
         )
     
-    async def evaluate(self, response: str, challenge: Challenge) -> float:
+    async def evaluate(
+        self,
+        response: str,
+        challenge: Challenge,
+        judge_model: str = None,
+        judge_base_url: str = None,
+        judge_api_key: str = None
+    ) -> float:
         """
         Evaluate math response using HybridMathRubric
         
         Args:
             response: Model response to evaluate
             challenge: Original challenge with answer
+            judge_model: Override judge model for this evaluation
+            judge_base_url: Override judge base URL for this evaluation
+            judge_api_key: Override judge API key for this evaluation
         
         Returns:
             Score between 0.0 and 1.0
@@ -298,18 +308,34 @@ class MathTask:
         prompt_messages = [{"role": "user", "content": challenge.prompt}]
         completion_messages = [{"role": "assistant", "content": response}]
         
+        # Use custom judge configuration if provided
+        rubric = self.rubric
+        if judge_model is not None or judge_base_url is not None or judge_api_key is not None:
+            # Create temporary judge client with custom configuration
+            api_key = judge_api_key or os.getenv("CHUTES_API_KEY", "EMPTY")
+            http_client = httpx.AsyncClient(timeout=HTTPX_TIMEOUT, limits=HTTPX_LIMITS)
+            judge_client = AsyncOpenAI(base_url=judge_base_url, api_key=api_key, http_client=http_client)
+            
+            # Create temporary rubric with custom configuration
+            rubric = HybridMathRubric(
+                judge_model=judge_model or self.rubric.judge_model,
+                judge_client=judge_client,
+                judge_sampling_args={},
+                judge_prompt=CV_COT_PROMPT,
+            )
+        
         # Evaluate using rubric
         state = vf.State()
         
         try:
             # Run math verification first
-            await self.rubric.math_verify_score(completion_messages, answer, state)
+            await rubric.math_verify_score(completion_messages, answer, state)
             
             # Run judge if needed
-            await self.rubric.judge_score(prompt_messages, completion_messages, answer, state)
+            await rubric.judge_score(prompt_messages, completion_messages, answer, state)
             
             # Get final score
-            score = await self.rubric.correct_answer(state)
+            score = await rubric.correct_answer(state)
             
             logger.info(f"Evaluation complete: score={score}, state={state}")
             return score
