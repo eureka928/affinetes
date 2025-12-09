@@ -17,6 +17,12 @@ from openai import AsyncOpenAI
 
 sys.path.insert(0, '/app')
 from models import Challenge
+from utils import (
+    BASE_IMPORTS,
+    generate_function_wrapper,
+    compare_stdout_results,
+    compare_function_results,
+)
 
 # We set higher timeouts than default to avoid judge timeout during eval
 HTTPX_TIMEOUT = httpx.Timeout(1200)
@@ -40,6 +46,7 @@ INSTRUCTION_PROMPT = "Solve the programming task below in a Python markdown code
 DEFAULT_TEST_TIMEOUT = 20
 
 
+
 def extract_code_from_markdown(text: str) -> str:
     """Extract Python code from markdown code blocks."""
     # Try to find ```python blocks first
@@ -56,6 +63,8 @@ def extract_code_from_markdown(text: str) -> str:
     
     # If no code blocks, return the text as-is
     return text.strip()
+
+
 
 
 class CodeTask:
@@ -90,15 +99,19 @@ class CodeTask:
             info = json.loads(x["info"])
             tests = json.loads(info["tests"])
             
-            # Encode inputs/outputs as JSON strings (matching original i3-code implementation)
-            # This ensures compatibility with the decode logic in evaluate()
+            # Store inputs/outputs as JSON strings (one level of encoding)
+            # This matches the original project's data format
             inputs = [json.dumps(tests["inputs"][i]) for i in range(len(tests["inputs"]))]
             outputs = [json.dumps(tests["outputs"][i]) for i in range(len(tests["outputs"]))]
+            
+            # Extract fn_name if present
+            fn_name = tests.get("fn_name", "") or ""
             
             # Rebuild tests dict with encoded strings
             encoded_tests = {
                 "inputs": inputs,
-                "outputs": outputs
+                "outputs": outputs,
+                "fn_name": fn_name
             }
             
             return {
@@ -185,6 +198,7 @@ class CodeTask:
         # Extract test data (inputs and outputs are JSON strings)
         inputs = tests.get("inputs", [])
         outputs = tests.get("outputs", [])
+        fn_name = tests.get("fn_name", "")
         
         if not inputs or not outputs:
             logger.warning("No test inputs/outputs found")
@@ -194,6 +208,9 @@ class CodeTask:
             logger.error(f"Mismatch: {len(inputs)} inputs vs {len(outputs)} outputs")
             return 0.0, f"0/{len(inputs)}"
         
+        # Determine execution mode based on fn_name
+        use_function_mode = bool(fn_name and fn_name.strip())
+        
         # Run tests in parallel using asyncio.gather
         total = len(inputs)
         tasks = []
@@ -201,24 +218,35 @@ class CodeTask:
         for i in range(total):
             try:
                 # Parse input and output (they are JSON strings)
-                test_input_str = json.loads(inputs[i])
-                expected_output_str = json.loads(outputs[i])
+                test_input = json.loads(inputs[i])
+                expected_output = json.loads(outputs[i])
                 
-                # Convert to string for stdin - inputs already contain proper formatting
-                if isinstance(test_input_str, str):
-                    stdin_input = test_input_str
+                if use_function_mode:
+                    # Function call mode - pass JSON string for expected_output
+                    # to match original project's comparison logic
+                    task = self._run_function_test(
+                        code=code,
+                        fn_name=fn_name,
+                        test_input=test_input,
+                        expected_output=outputs[i],  # Pass JSON string
+                        timeout=timeout,
+                        test_index=i
+                    )
                 else:
-                    # Should not happen based on task format, but handle gracefully
-                    stdin_input = str(test_input_str)
+                    # Stdin/stdout mode
+                    if isinstance(test_input, str):
+                        stdin_input = test_input
+                    else:
+                        stdin_input = str(test_input)
+                    
+                    task = self._run_stdin_test(
+                        code=code,
+                        stdin_input=stdin_input,
+                        expected_output=expected_output,
+                        timeout=timeout,
+                        test_index=i
+                    )
                 
-                # Create task for parallel execution
-                task = self._run_test_with_subprocess(
-                    code=code,
-                    stdin_input=stdin_input,
-                    expected_output=expected_output_str,
-                    timeout=timeout,
-                    test_index=i
-                )
                 tasks.append(task)
                     
             except Exception as e:
@@ -252,30 +280,33 @@ class CodeTask:
         
         return score, test_result
     
-    async def _run_test_with_subprocess(
+    async def _run_stdin_test(
         self,
         code: str,
         stdin_input: str,
-        expected_output: str,
+        expected_output,
         timeout: int,
         test_index: int
     ) -> bool:
         """
-        Run a single test case in a subprocess with strict timeout and cleanup
+        Run a single stdin/stdout test case in a subprocess
         
         Args:
             code: Python code to execute
             stdin_input: Input to provide via stdin
-            expected_output: Expected output string
+            expected_output: Expected output string or value
             timeout: Timeout in seconds
             test_index: Index of the test (for logging)
         
         Returns:
             True if test passed, False otherwise
         """
+        # Add BASE_IMPORTS to code
+        full_code = f"{BASE_IMPORTS}\n{code}"
+        
         # Create temporary file for code
         with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-            f.write(code)
+            f.write(full_code)
             temp_file = f.name
         
         process = None
@@ -304,16 +335,16 @@ class CodeTask:
                         logger.debug(f"Test {test_index}: stderr: {stderr.decode('utf-8', errors='ignore')[:200]}")
                     return False
                 
-                # Compare output
-                actual_output = stdout.decode('utf-8', errors='ignore').strip()
-                expected_output_stripped = expected_output.strip()
+                # Compare output using flexible comparison
+                actual_output = stdout.decode('utf-8', errors='ignore')
+                expected_str = str(expected_output) if not isinstance(expected_output, str) else expected_output
                 
-                if actual_output == expected_output_stripped:
+                if compare_stdout_results(actual_output, expected_str):
                     return True
                 else:
                     logger.debug(f"Test {test_index}: Output mismatch")
-                    logger.debug(f"Expected: {expected_output_stripped[:200]}")
-                    logger.debug(f"Got: {actual_output[:200]}")
+                    logger.debug(f"Expected: {expected_str[:200]}")
+                    logger.debug(f"Got: {actual_output.strip()[:200]}")
                     return False
                     
             except asyncio.TimeoutError:
@@ -328,6 +359,154 @@ class CodeTask:
                     
                     try:
                         # Also try direct kill
+                        process.kill()
+                        await process.wait()
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                return False
+                
+        except Exception as e:
+            logger.debug(f"Test {test_index}: Exception during execution: {e}")
+            return False
+        finally:
+            # Ensure process is terminated
+            if process and process.returncode is None:
+                try:
+                    process.kill()
+                    await process.wait()
+                except (ProcessLookupError, PermissionError):
+                    pass
+            
+            # Clean up temporary file
+            try:
+                os.unlink(temp_file)
+            except OSError:
+                pass
+    
+    async def _run_function_test(
+        self,
+        code: str,
+        fn_name: str,
+        test_input,
+        expected_output,
+        timeout: int,
+        test_index: int
+    ) -> bool:
+        """
+        Run a single function-based test case
+        
+        Args:
+            code: Python code containing the function
+            fn_name: Name of the function to call
+            test_input: Input to pass to the function
+            expected_output: Expected return value
+            timeout: Timeout in seconds
+            test_index: Index of the test (for logging)
+        
+        Returns:
+            True if test passed, False otherwise
+        """
+        # Add BASE_IMPORTS to code first (matching original project)
+        full_code = f"{BASE_IMPORTS}\n{code}"
+        
+        # Convert test_input to string format if it's a list (matching original project)
+        if isinstance(test_input, list):
+            test_input_str = "\n".join(str(k) for k in test_input)
+        else:
+            test_input_str = str(test_input)
+        
+        # Generate wrapper script (pass string format)
+        wrapper_code = generate_function_wrapper(full_code, fn_name, test_input_str)
+        
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            f.write(wrapper_code)
+            temp_file = f.name
+        
+        process = None
+        try:
+            # Start subprocess
+            process = await asyncio.create_subprocess_exec(
+                'python3', temp_file,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                preexec_fn=lambda: self._set_process_limits() if hasattr(os, 'setrlimit') else None
+            )
+            
+            try:
+                # Run with timeout
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=timeout
+                )
+                
+                # Check exit code
+                if process.returncode != 0:
+                    logger.debug(f"Test {test_index}: Non-zero exit code {process.returncode}")
+                    if stderr:
+                        logger.debug(f"Test {test_index}: stderr: {stderr.decode('utf-8', errors='ignore')[:200]}")
+                    return False
+                
+                # Parse JSON output
+                try:
+                    output_str = stdout.decode('utf-8', errors='ignore').strip()
+                    result_data = json.loads(output_str)
+                    
+                    if not result_data.get("success", False):
+                        error_msg = result_data.get('error', 'unknown')
+                        logger.debug(f"Test {test_index}: Execution failed: {error_msg}")
+                        return False
+                    
+                    exec_outputs = result_data["result"]
+                    
+                    # Parse expected_output from JSON string (double-encoded in dataset)
+                    # First json.loads() to get the stored value, then check if it needs another parse
+                    test_case_outputs = json.loads(expected_output)
+                    if isinstance(test_case_outputs, str):
+                        # Dataset stores JSON strings as double-encoded, need another parse
+                        try:
+                            test_case_outputs = json.loads(test_case_outputs)
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    
+                    # Apply original project's comparison logic (code_exec.py Line 159-177)
+                    if isinstance(exec_outputs, tuple):
+                        exec_outputs = list(exec_outputs)
+                    
+                    tmp_result = exec_outputs == test_case_outputs
+                    if isinstance(test_case_outputs, list):
+                        tmp_result = tmp_result or (exec_outputs == test_case_outputs[0])
+                    
+                    # ground truth sequences are not tuples
+                    try:
+                        if isinstance(exec_outputs[0], tuple):
+                            exec_outputs = [list(x) for x in exec_outputs]
+                            tmp_result = tmp_result or (exec_outputs == test_case_outputs[0])
+                    except:
+                        pass
+                    
+                    if tmp_result:
+                        return True
+                    else:
+                        logger.debug(f"Test {test_index}: Result mismatch")
+                        logger.debug(f"Expected: {test_case_outputs} (type={type(test_case_outputs)})")
+                        logger.debug(f"Got: {exec_outputs} (type={type(exec_outputs)})")
+                        return False
+                    
+                except json.JSONDecodeError as e:
+                    logger.debug(f"Test {test_index}: Failed to parse output: {e}")
+                    logger.debug(f"Output was: {output_str[:300]}")
+                    return False
+                    
+            except asyncio.TimeoutError:
+                logger.debug(f"Test {test_index}: Timeout after {timeout}s")
+                if process and process.returncode is None:
+                    try:
+                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError, AttributeError):
+                        pass
+                    try:
                         process.kill()
                         await process.wait()
                     except (ProcessLookupError, PermissionError):
