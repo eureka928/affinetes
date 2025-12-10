@@ -18,26 +18,14 @@ from logic_task import LogicTask
 class Actor:
     """Logic task evaluation actor"""
     
-    def __init__(
-        self,
-        api_key: str = None,
-        judge_model: str = None,
-        judge_base_url: str = None,
-        judge_api_key: str = None
-    ):
+    def __init__(self, api_key: str = None):
         """
-        Initialize Actor with API key and judge configuration
+        Initialize Actor with API key
         
         Args:
             api_key: API key for LLM service. If not provided, will use CHUTES_API_KEY env var
-            judge_model: Judge model for LLM-based evaluation (not used in logic tasks)
-            judge_base_url: Base URL for judge API (not used in logic tasks)
-            judge_api_key: API key for judge model (not used in logic tasks)
         """
         self.api_key = api_key or os.getenv("CHUTES_API_KEY")
-        self.judge_model = judge_model
-        self.judge_base_url = judge_base_url
-        self.judge_api_key = judge_api_key
         
         # Initialize logic task instance
         self.logic_task = LogicTask()
