@@ -19,6 +19,7 @@ COPY swebench_config.yaml .
 
 # Expose port for affinetes HTTP server
 EXPOSE 8000
+ENV UVICORN_WORKERS=1
 
 # Note: Container should be run with -v /var/run/docker.sock:/var/run/docker.sock
 # to enable Docker-out-of-Docker functionality

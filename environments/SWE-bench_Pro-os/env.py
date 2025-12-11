@@ -10,7 +10,7 @@ from datasets import load_dataset
 from minisweagent.agents.default import DefaultAgent
 from minisweagent.environments.docker import DockerEnvironment
 from minisweagent.models.litellm_model import LitellmModel
-
+import asyncio
 
 class Actor:
     """SWE-bench Pro environment actor"""
@@ -152,6 +152,7 @@ class Actor:
             timeout=timeout,
             executable="docker",  # DOOD: use host docker
             run_args=["--rm", "--name", container_name],  # Ensure cleanup and unique naming
+            container_timeout=str(timeout),
         )
         
         # Load SWE-bench agent configuration from YAML (in Docker image)
@@ -176,7 +177,14 @@ class Actor:
         patch = ""
         
         try:
-            exit_status, result = agent.run(problem_statement)
+            # Run agent.run() in thread pool to avoid blocking event loop
+            # This allows multiple concurrent evaluate() calls to run in parallel
+            loop = asyncio.get_event_loop()
+            exit_status, result = await loop.run_in_executor(
+                None,
+                agent.run,
+                problem_statement
+            )
             patch = result  # Final output is the patch
             
         except Exception as e:
