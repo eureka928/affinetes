@@ -107,6 +107,10 @@ class Actor:
         # Generate challenge
         challenge = await self.code_task.generate(task_id=task_id)
         
+        # Add model and base_url info to challenge.extra for logging
+        challenge.extra["model"] = model
+        challenge.extra["base_url"] = base_url
+        
         # Call LLM
         try:
             resp = await self._llm_chat(challenge.prompt, model, base_url, timeout, temperature, current_api_key, seed)

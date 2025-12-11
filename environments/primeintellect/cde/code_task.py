@@ -177,6 +177,14 @@ class CodeTask:
                 - score: 1.0 if all tests pass, else 0.0
                 - test_result: String in format "passed/total" (e.g., "7/15")
         """
+        # Log evaluation start
+        task_id = challenge.extra.get("task_id")
+        model = challenge.extra.get("model", "N/A")
+        base_url = challenge.extra.get("base_url", "N/A")
+        logger.info(
+            f"Evaluation start: task_id={task_id}, model={model}, base_url={base_url}"
+        )
+        
         tests_str = challenge.extra.get("tests", "")
         if not tests_str:
             logger.warning("No tests provided")
@@ -265,8 +273,10 @@ class CodeTask:
         score = 1.0 if passed == total else 0.0
         
         test_result = f"{passed}/{total}"
-        task_id = challenge.extra.get("task_id")
-        logger.info(f"Evaluation complete: task_id={task_id}, {test_result}, score={score}")
+        logger.info(
+            f"Evaluation complete: task_id={task_id}, model={model}, "
+            f"base_url={base_url}, {test_result}, score={score}"
+        )
         
         return score, test_result
     
@@ -461,7 +471,8 @@ class CodeTask:
         """Monitor subprocess memory and kill if exceeds limit"""
         try:
             import psutil
-            await asyncio.sleep(0.2)
+            # Reduced initial delay from 0.2s to 0.1s for faster response
+            await asyncio.sleep(0.1)
             
             try:
                 proc = psutil.Process(process.pid)
@@ -473,8 +484,12 @@ class CodeTask:
                     if not proc.is_running():
                         return
                     
-                    rss_mb = proc.memory_info().rss / 1024 / 1024
+                    # Monitor both RSS and VMS for more accurate tracking
+                    mem_info = proc.memory_info()
+                    rss_mb = mem_info.rss / 1024 / 1024
+                    vms_mb = mem_info.vms / 1024 / 1024
                     
+                    # Use RSS as primary metric, but warn on VMS growth
                     if rss_mb > SUBPROCESS_MEMORY_LIMIT_MB:
                         logger.warning(
                             f"Test {test_index}: Memory limit exceeded - "
@@ -483,7 +498,15 @@ class CodeTask:
                         proc.kill()
                         return
                     
-                    await asyncio.sleep(0.2)
+                    # Also warn if VMS is significantly higher
+                    if vms_mb > SUBPROCESS_MEMORY_LIMIT_MB * 1.5:
+                        logger.warning(
+                            f"Test {test_index}: High VMS - "
+                            f"PID={process.pid} VMS={vms_mb:.1f}MB (RSS={rss_mb:.1f}MB)"
+                        )
+                    
+                    # Reduced polling interval from 0.2s to 0.1s for tighter monitoring
+                    await asyncio.sleep(0.1)
                     
                 except psutil.NoSuchProcess:
                     return
