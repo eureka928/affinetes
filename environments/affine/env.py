@@ -80,7 +80,9 @@ class Actor:
         if content is None:
             raise ValueError("LLM API returned None content (possible content filtering or API error)")
         
-        return content.strip()
+        # Return both content and usage information
+        usage = response.usage.model_dump() if response.usage else None
+        return content.strip(), usage
     
     async def evaluate(
         self,
@@ -131,8 +133,9 @@ class Actor:
         challenge = await task_instance.generate(task_id=task_id)
         
         # Call LLM
+        usage = None
         try:
-            resp = await self._llm_chat(challenge.prompt, model, base_url, timeout, temperature, current_api_key, seed)
+            resp, usage = await self._llm_chat(challenge.prompt, model, base_url, timeout, temperature, current_api_key, seed)
             error = None
         except Exception as e:
             import traceback
@@ -156,7 +159,8 @@ class Actor:
             "time_taken": time.time() - start,
             "extra": {
                 "conversation": conversation,
-                "seed": seed
+                "seed": seed,
+                "usage": usage
             }
         }
         
