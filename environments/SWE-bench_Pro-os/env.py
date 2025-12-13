@@ -197,21 +197,11 @@ class Actor:
             print(f"Error running agent: {e}")
         
         finally:
-            # Clean up environment
             try:
                 env.cleanup()
+                print(f"Stop container: {container_name}")
             except Exception as cleanup_error:
-                try:
-                    if hasattr(env, 'container_id') and env.container_id:
-                        subprocess.run(
-                            ["docker", "rm", "-f", env.container_id],
-                            capture_output=True,
-                            timeout=30,
-                        )
-                        print(f"Force removed container {env.container_id}")
-                except Exception as force_cleanup_error:
-                    print(f"Error: Force cleanup also failed for task {task_id}: {force_cleanup_error}")
-        
+                print(f"cleanup_error: {cleanup_error}")
         # Verify patch
         score = self._verify_patch(instance, patch) if patch else 0.0
         

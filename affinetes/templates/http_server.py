@@ -76,7 +76,7 @@ async def call_method(call: MethodCall):
         raise HTTPException(404, f"Method not found: {call.method}")
     
     # Extract timeout parameter if present (only used for wait_for, not passed to method)
-    timeout = call.kwargs.pop("timeout", None)
+    timeout = call.kwargs.get("timeout", None)
     
     # Execute with optional timeout enforcement
     try:
