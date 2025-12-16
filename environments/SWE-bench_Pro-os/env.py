@@ -234,13 +234,12 @@ class Actor:
             # Create and run agent
             agent = DefaultAgent(model_obj, env, **agent_config)
             
-            exit_status = "unknown"
-            result = ""
+            error = ""
             patch = ""
             
             try:
                 loop = asyncio.get_event_loop()
-                exit_status, result = await loop.run_in_executor(
+                _, result = await loop.run_in_executor(
                     None,
                     agent.run,
                     problem_statement
@@ -249,11 +248,9 @@ class Actor:
                 
             except Exception as e:
                 import traceback
-                exit_status = type(e).__name__
-                result = str(e)
+                error = traceback.format_exc()
                 patch = ""
-                error_msg = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
-                print(f"Error running agent: {error_msg}")
+                print(f"Error running agent: {type(e).__name__}: {str(e)}")
             
             finally:
                 try:
@@ -295,12 +292,13 @@ class Actor:
             } if total_tokens > 0 else None
             
             metadata = {
-                "exit_status": exit_status,
-                "result": result,
                 "model_calls": agent.model.n_calls,
                 "model_cost": agent.model.cost,
                 "usage": usage,
             }
+            
+            if error:
+                metadata["error"] = error
             
             return patch, metadata, clean_conversation
             
@@ -309,7 +307,12 @@ class Actor:
             error_trace = traceback.format_exc()
             print(f"Error generating patch: {e}")
             print(error_trace)
-            return None, {"error": str(e), "traceback": error_trace}, []
+            return None, {
+                "error": error_trace,
+                "model_calls": 0,
+                "model_cost": 0,
+                "usage": None
+            }, []
     
     def _verify_patch(self, instance: dict, patch: str) -> tuple[float, Optional[Dict[str, Any]]]:
         """
@@ -320,8 +323,8 @@ class Actor:
             Tuple of (score, test_stats)
         """
         if not patch or not patch.strip():
-            return 0.0, None
-        
+            return 0.0, {"error": "no patch"}
+
         try:
             instance_id = instance["instance_id"]
             
@@ -346,16 +349,14 @@ class Actor:
             required_tests = f2p | p2p
             
             if not required_tests:
-                print(f"Warning: No required tests for {instance_id}")
-                return 0.0, None
+                return 0.0, {"error": f"Warning: No required tests for {instance_id}"}
             
             # Load instance-specific scripts
             run_script = self._load_instance_script(instance_id, "run_script.sh")
             parser_script = self._load_instance_script(instance_id, "parser.py")
             
             if not run_script or not parser_script:
-                print(f"✗ Missing scripts for {instance_id}")
-                return 0.0, None
+                return 0.0, {"error": f"✗ Missing scripts for {instance_id}"}
             
             # Create entryscript with embedded files (for DooD compatibility)
             entryscript = create_entryscript(instance, self.dockerfiles_dir)
@@ -412,6 +413,7 @@ fi
                 )
             except Exception as e:
                 print(f"Warning: Could not pull image {image}: {e}")
+                return 0.0, {"error": str(e)}
             
             # Run Docker container with script passed via stdin
             cmd = [
@@ -439,7 +441,7 @@ fi
                 print(f"✗ No output markers found for {instance_id}")
                 print(f"stdout: {stdout[:500]}")
                 print(f"stderr: {result.stderr[:500]}")
-                return 0.0, None
+                return 0.0, {"error": result.stderr}
             
             json_start = stdout.index(begin_marker) + len(begin_marker)
             json_end = stdout.index(end_marker)
@@ -450,7 +452,7 @@ fi
             except json.JSONDecodeError as e:
                 print(f"✗ Failed to parse JSON for {instance_id}: {e}")
                 print(f"JSON string: {json_str[:500]}")
-                return 0.0, None
+                return 0.0, {"error": str(e)}
             
             # Verify tests (exact logic from swe_bench_pro_eval.py lines 530-533)
             passed_tests = {x["name"] for x in output["tests"] if x["status"] == "PASSED"}
@@ -477,13 +479,15 @@ fi
                 return 0.0, test_stats
                 
         except subprocess.TimeoutExpired:
-            print(f"Timeout while verifying patch for {instance.get('instance_id', 'unknown')}")
-            return 0.0, None
+            error_msg = f"Timeout while verifying patch for {instance.get('instance_id', 'unknown')}"
+            print(error_msg)
+            return 0.0, {"error": error_msg}
         except Exception as e:
             import traceback
+            error_msg = traceback.format_exc()
             print(f"Error verifying patch: {e}")
-            print(traceback.format_exc())
-            return 0.0, None
+            print(error_msg)
+            return 0.0, {"error": error_msg}
     
     async def evaluate(
         self,
@@ -546,10 +550,9 @@ fi
             seed
         )
         
-        error = generation_metadata.get("error") if generation_metadata else None
-        
+        # Handle patch generation failure
         if not patch:
-            return {
+            result = {
                 "task_name": "swe-bench-pro",
                 "score": 0.0,
                 "success": False,
@@ -564,6 +567,10 @@ fi
                     "usage": generation_metadata.get("usage"),
                 }
             }
+            # Add error information if present
+            if generation_metadata.get("error"):
+                result["extra"]["error"] = generation_metadata["error"]
+            return result
         
         print(f"Generated patch ({len(patch)} chars)")
         
@@ -571,7 +578,7 @@ fi
         print(f"Step 2: Verifying patch for {instance_id}...")
         score, test_stats = self._verify_patch(instance, patch)
         
-        # Return result
+        # Build result
         result_dict = {
             "task_name": "swe-bench-pro",
             "score": score,
@@ -579,11 +586,11 @@ fi
             "time_taken": time.time() - start,
             "extra": {
                 "instance_id": instance_id,
+                "task_id": task_id,
                 "patch": patch,
                 "conversation": conversation,
                 "model_calls": generation_metadata.get("model_calls", 0),
                 "model_cost": generation_metadata.get("model_cost", 0),
-                "task_id": task_id,
                 "usage": generation_metadata.get("usage"),
             }
         }
@@ -591,9 +598,5 @@ fi
         # Add test statistics if available
         if test_stats:
             result_dict["extra"].update(test_stats)
-        
-        if error:
-            result_dict["extra"]["error"] = error
-            result_dict["extra"]["error_type"] = generation_metadata.get("exit_status", "unknown")
         
         return result_dict
