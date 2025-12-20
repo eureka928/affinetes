@@ -93,7 +93,7 @@ def _gen_liars_dice_params(config_id: int) -> Dict[str, Any]:
     dice_var = config_id % 5
     return {
         "players": 2,
-        "dice_per_player": 1 + dice_var  # 1, 2, 3, 4, 5
+        "numdice": 1 + dice_var  # 1, 2, 3, 4, 5
     }
 
 
@@ -107,23 +107,33 @@ def _gen_battleship_params(config_id: int) -> Dict[str, Any]:
     Battleship with random ship placement
     
     Randomness: Ship placement for both players
-    - 8×8 board, 3 ships: ~10⁶ placements per player → ~10¹² combinations
-    - 10×10 board, 4 ships: ~10⁸ placements per player → ~10¹⁶ combinations
-    - 12×12 board, 5 ships: ~10¹⁰ placements per player → ~10²⁰ combinations
+    - 6×6 board, small ships: high placement combinations
+    - 8×8 board, medium ships: higher placement combinations
+    - 10×10 board, large ships: even higher placement combinations
     
-    Config space: 3 (board) × 3 (ships) = 9 variants
+    Config space: 3 board size variants (max board size = 10 per OpenSpiel constraint)
     Total trajectories: > 10²⁰
     """
-    board_var = (config_id // 3) % 3
-    ships_var = config_id % 3
+    board_var = config_id % 3
     
-    board_size = 8 + board_var * 2  # 8, 10, 12
-    num_ships = 3 + ships_var  # 3, 4, 5
+    board_size = 6 + board_var * 2  # 6, 8, 10
+    
+    # ship_sizes and ship_values must be in format "[val1;val2;val3]" per OpenSpiel spec
+    if board_var == 0:
+        ship_sizes = "[2;2]"  # Small ships for 6x6
+        ship_values = "[1;1]"  # Equal values
+    elif board_var == 1:
+        ship_sizes = "[2;3;3]"  # Medium ships for 8x8
+        ship_values = "[1;1;1]"  # Equal values
+    else:
+        ship_sizes = "[2;3;3;4]"  # Larger ships for 10x10
+        ship_values = "[1;1;1;1]"  # Equal values
     
     return {
         "board_width": board_size,
         "board_height": board_size,
-        "num_ships": num_ships
+        "ship_sizes": ship_sizes,
+        "ship_values": ship_values
     }
 
 
@@ -170,11 +180,12 @@ def _gen_gin_rummy_params(config_id: int) -> Dict[str, Any]:
     
     Config space: 3 (hand) × 3 (knock) = 9 variants
     Total trajectories: > 10⁶⁰ (effectively infinite)
+    
+    Note: Gin Rummy is always a 2-player game, doesn't support players parameter
     """
     hand_var = (config_id // 3) % 3
     knock_var = config_id % 3
     return {
-        "players": 2,
         "hand_size": 7 + hand_var,  # 7, 8, 9
         "knock_card": 10 - knock_var  # 10, 9, 8
     }
@@ -232,8 +243,10 @@ def _gen_blackjack_params(config_id: int) -> Dict[str, Any]:
     - Total trajectories: > 10^60
     
     Config space: 1 variant
+    
+    Note: Blackjack doesn't support players parameter (single player vs dealer)
     """
-    return {"players": 1}
+    return {}
 
 
 # ============================================================================
@@ -249,9 +262,12 @@ def _gen_phantom_ttt_params(config_id: int) -> Dict[str, Any]:
     - Total trajectories: > 1,000
     
     Config space: 2 variants
+    
+    Note: obstype expects string values
     """
     obstype_var = config_id % 2
-    return {"obstype": obstype_var}
+    obstype_str = "reveal-nothing" if obstype_var == 0 else "reveal-numturns"
+    return {"obstype": obstype_str}
 
 
 # ============================================================================
@@ -364,16 +380,16 @@ def _gen_euchre_params(config_id: int) -> Dict[str, Any]:
 @register_param_generator("othello")
 def _gen_othello_params(config_id: int) -> Dict[str, Any]:
     """
-    Othello with different board sizes
+    Othello (Reversi)
     
-    Different sizes create vastly different strategy spaces
-    - Total trajectories: > 100 per size
+    Standard 8x8 board game
+    - Total trajectories: > 100
     
-    Config space: 2 variants (6x6, 8x8)
+    Config space: 1 variant (standard Othello)
+    
+    Note: OpenSpiel's Othello implementation doesn't support board_size parameter
     """
-    size_var = config_id % 2
-    board_size = 6 + size_var * 2  # 6 or 8
-    return {"board_size": board_size}
+    return {}
 
 
 # ============================================================================
@@ -495,6 +511,8 @@ def _gen_quoridor_params(config_id: int) -> Dict[str, Any]:
     - Total trajectories: > 100 per configuration
     
     Config space: 2 (sizes) × 2 (walls) = 4 variants
+    
+    Note: Parameter is wall_count not number_of_walls
     """
     size_var = (config_id // 2) % 2
     walls_var = config_id % 2
@@ -504,7 +522,7 @@ def _gen_quoridor_params(config_id: int) -> Dict[str, Any]:
     
     return {
         "board_size": board_size,
-        "number_of_walls": num_walls
+        "wall_count": num_walls
     }
 
 
