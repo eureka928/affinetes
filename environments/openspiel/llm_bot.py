@@ -8,6 +8,8 @@ import concurrent.futures
 import time
 from typing import Callable, Awaitable, Tuple, Optional
 
+from game_rules import get_game_rules
+
 
 class LLMBot(pyspiel.Bot):
     """
@@ -162,8 +164,12 @@ class LLMBot(pyspiel.Bot):
         Reuses OpenSpiel's state description capabilities:
         - state.__str__(): Game state string representation
         - state.action_to_string(): Readable action description
+        - get_game_rules(): Load game rules from game_rules/ directory
         """
         game_name = self._game.get_type().short_name
+
+        # Load game rules if available
+        game_rules = get_game_rules(game_name)
 
         # Use OpenSpiel's built-in state description
         state_str = str(state)
@@ -175,21 +181,21 @@ class LLMBot(pyspiel.Bot):
             for action in legal_actions
         ]
 
-        # Construct prompt
-        prompt = f"""You are playing {game_name}.
-
-Current game state:
-{state_str}
-
-You are Player {self._player_id}.
-
-Legal actions:
-{chr(10).join(actions_desc)}
-
-Choose one action by responding with ONLY the action number.
-Your choice: """
-
-        return prompt
+        # Construct prompt with rules if available
+        prompt_parts = [f"You are playing {game_name}."]
+        
+        if game_rules:
+            prompt_parts.append(f"\n{game_rules}\n")
+        
+        prompt_parts.extend([
+            f"\nCurrent game state:\n{state_str}\n",
+            f"You are Player {self._player_id}.\n",
+            f"Legal actions:\n{chr(10).join(actions_desc)}\n",
+            "Choose one action by responding with ONLY the action number.",
+            "Your choice: "
+        ])
+        
+        return "".join(prompt_parts)
 
     def _parse_action(self, response: str, legal_actions: list) -> int:
         """
