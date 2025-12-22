@@ -9,7 +9,7 @@ from typing import Dict, Any
 
 
 class GoAgent(BaseGameAgent):
-    """Go Game Agent - Uses default observation_string formatting"""
+    """Go Game Agent"""
     
     @property
     def game_name(self) -> str:
@@ -25,7 +25,7 @@ Ko rule: Cannot immediately recapture to repeat previous board position.
 
 Territory: Empty intersections surrounded by your stones. Scoring: Territory + captured stones + komi (bonus for White, typically 6.5-7.5 points).
 Winning: Higher score wins."""
-    
+
     def generate_params(self, config_id: int) -> Dict[str, Any]:
         """
         Go parameter generation

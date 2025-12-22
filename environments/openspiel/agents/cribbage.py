@@ -9,7 +9,7 @@ from typing import Dict, Any
 
 
 class CribbageAgent(BaseGameAgent):
-    """Cribbage Game Agent - Uses default observation_string formatting"""
+    """Cribbage Game Agent"""
     
     @property
     def game_name(self) -> str:
@@ -27,7 +27,7 @@ Counting: After play, count hand + starter card for combinations (pairs, runs, 1
 Dealer also counts the crib.
 
 Scoring is complex; points tracked on cribbage board (pegging)."""
-    
+
     def generate_params(self, config_id: int) -> Dict[str, Any]:
         """
         Cribbage parameter generation

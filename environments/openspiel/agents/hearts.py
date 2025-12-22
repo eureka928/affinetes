@@ -9,7 +9,7 @@ from typing import Dict, Any
 
 
 class HeartsAgent(BaseGameAgent):
-    """Hearts Game Agent - Uses default observation_string formatting"""
+    """Hearts Game Agent"""
     
     @property
     def game_name(self) -> str:
@@ -26,7 +26,7 @@ Cannot lead hearts until hearts "broken" (someone discarded a heart).
 
 Scoring: Each heart = 1 point, Queen of Spades = 13 points. Lowest score wins.
 Shooting the moon: Take ALL penalty cards to give 26 points to each opponent instead."""
-    
+
     def generate_params(self, config_id: int) -> Dict[str, Any]:
         """
         Hearts parameter generation

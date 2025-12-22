@@ -31,23 +31,16 @@ class BaseGameAgent(ABC):
             Complete rule description text
         """
         pass
-    
-    def format_state(self, state: pyspiel.State, player_id: int) -> str:
-        """
-        Convert OpenSpiel state to LLM-friendly description
-        
-        DEFAULT IMPLEMENTATION: Use observation_string as fallback.
-        Most games can use this default. Override only if needed for better formatting.
-        
-        Args:
-            state: OpenSpiel game state
-            player_id: Current player ID
-            
-        Returns:
-            Human-readable state description
-        """
-        return state.observation_string(player_id)
-    
+
+    def format_state(self, state, player_id: int) -> str:
+        try:
+            return state.observation_string(player_id)
+        except:
+            try:
+                return state.information_state_string(player_id)
+            except:
+                return str(state)
+
     @abstractmethod
     def generate_params(self, config_id: int) -> Dict[str, Any]:
         """

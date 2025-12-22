@@ -106,6 +106,8 @@ class LLMBot(pyspiel.Bot):
         if not self._system_prompt_generated:
             system_prompt = self._generate_system_prompt()
             self._messages.append({"role": "system", "content": system_prompt})
+            # Also record in conversation for debugging
+            self._conversation.append({"role": "system", "content": system_prompt})
             self._system_prompt_generated = True
         
         # Generate user prompt (current turn)
@@ -321,14 +323,11 @@ class LLMBot(pyspiel.Bot):
         """Record successful turn in conversation"""
         self._conversation.append({
             "role": "user",
-            "content": user_prompt,
-            "type": "turn"
+            "content": user_prompt
         })
         self._conversation.append({
             "role": "assistant",
-            "content": response,
-            "action": action,
-            "retry_count": retry_count
+            "content": response
         })
         self._action_history.append((self._player_id, action))
 

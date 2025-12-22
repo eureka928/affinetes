@@ -23,7 +23,7 @@ Setup: Each player has N dice (1-5 depending on variant). All players roll their
 
 Goal: Make bids about total dice across ALL players, or call "Liar" on opponent's bid.
 
-Actions: 
+Actions:
 - Bid (quantity, face): Claim there are at least 'quantity' dice showing 'face' among all dice.
 - Call Liar: Challenge the previous bid.
 
@@ -31,8 +31,16 @@ Bidding rules: Each bid must be higher than the previous bid. "Higher" means:
   - Same face value but higher quantity (e.g., "2 fours" beats "1 four")
   - Same quantity but higher face value (e.g., "2 fives" beats "2 fours")
 
-Wild dice: In this variant, 6s are wild (can count as any face value).
-Example: If you bid "3 fours", you're claiming there are at least 3 dice showing 4 OR 6 among all players.
+CRITICAL - Wild dice: 6s are WILD and count as ANY face value!
+- When counting dice for a bid, ALWAYS include 6s in the count
+- Example: Bid "3 fours" means at least 3 dice showing EITHER 4 OR 6
+- Example: If you have dice [3, 6] and opponent bids "2-3" (two threes), there are actually 2 dice showing 3 or 6 (your 3 and your 6), so the bid is TRUE
+- When deciding to call "Liar", remember your 6s can count toward opponent's bid!
+
+Strategic tips:
+- Only call "Liar" when you're confident the bid is IMPOSSIBLE given your dice
+- Remember to count your 6s as wildcards when evaluating opponent's bid
+- Conservative play: avoid calling "Liar" unless the bid seems very high
 
 Winning: If you call Liar and previous bid was false, opponent loses. If bid was true or exact, you lose.
 """
@@ -64,8 +72,38 @@ Winning: If you call Liar and previous bid was false, opponent loses. If bid was
         ]
         
         if current_bid:
-            state_parts.append(f"Current bid on table: {current_bid}")
-            state_parts.append("You can either: (1) Make a higher bid, or (2) Call 'Liar'")
+            # Extract bid details for direct evaluation
+            bid_quantity, bid_face = self._extract_bid_details(current_bid)
+            if bid_quantity and bid_face:
+                # Count how many dice the player has that match the bid (including 6s as wild)
+                matching_dice = self._count_matching_dice(player_dice, bid_face)
+                
+                # Calculate if bid is definitely possible
+                # If player alone has enough matching dice, bid is DEFINITELY TRUE
+                if matching_dice >= bid_quantity:
+                    evaluation = "✓ DEFINITELY POSSIBLE (you alone have enough!)"
+                    advice = "DO NOT call 'Liar' - you know the bid is true!"
+                # If player has some matches and opponent could have the rest
+                elif matching_dice + num_dice_per_player >= bid_quantity:
+                    evaluation = "✓ LIKELY POSSIBLE (you have some, opponent might have rest)"
+                    advice = "RISKY to call 'Liar' - opponent might have the missing dice"
+                # If even with all opponent dice it's impossible
+                else:
+                    remaining_needed = bid_quantity - matching_dice
+                    evaluation = f"⚠ MIGHT BE IMPOSSIBLE (need {remaining_needed} more from opponent's {num_dice_per_player} dice)"
+                    advice = f"Calling 'Liar' is reasonable IF you think opponent doesn't have {remaining_needed}+ matching dice"
+                
+                state_parts.append(f"\n>>> OPPONENT'S BID: {current_bid} <<<")
+                state_parts.append(f"\n🎲 EVALUATION:")
+                state_parts.append(f"   - Bid claims: {bid_quantity} dice showing {bid_face}")
+                state_parts.append(f"   - You have: {matching_dice} matching dice (including 6s as wild)")
+                state_parts.append(f"   - {evaluation}")
+                state_parts.append(f"\n💡 ADVICE: {advice}")
+                state_parts.append("\nYou can either: (1) Make a higher bid, or (2) Call 'Liar'")
+            else:
+                state_parts.append(f"\n>>> OPPONENT'S BID: {current_bid} <<<")
+                state_parts.append("\nREMEMBER: 6s are WILD! Count your 6s when evaluating this bid.")
+                state_parts.append("You can either: (1) Make a higher bid, or (2) Call 'Liar'")
         else:
             state_parts.append("No bid yet - you must make the first bid")
         
@@ -106,30 +144,64 @@ Winning: If you call Liar and previous bid was false, opponent loses. If bid was
     
     def _extract_current_bid(self, state: pyspiel.State) -> str:
         """
-        Extract current bid
+        Extract current bid from information state
         
-        Infer current bid from state string or action history
+        Parse the last bid from information state string
+        Format: "dice_values bid_history"
+        Example: "36 1-3 2-5" means bids were "1-3", then "2-5"
         """
-        # Check state string
-        state_str = str(state).strip()
-        
-        # If initial state (e.g., "36 45"), no bid yet
-        # If contains other info, need to parse
-        
-        # Simplified: check if "Liar" is in legal actions
-        # If yes, there's already a bid
         try:
-            legal_actions = state.legal_actions()
-            has_liar = any("Liar" in state.action_to_string(0, a) for a in legal_actions)
+            player_id = state.current_player()
+            if player_id < 0:
+                return None
+                
+            # Get information state for current player
+            info_str = state.information_state_string(player_id)
             
-            if has_liar:
-                # Has Liar option, so there's a bid, but we need to infer from history
-                # Simplified: return hint
-                return "(Check action history for last bid)"
+            if not info_str or ' ' not in info_str:
+                return None
+            
+            # Split by space: first part is dice, rest are bids
+            parts = info_str.split()
+            
+            # Find bid history (format: "quantity-face")
+            bids = [p for p in parts[1:] if '-' in p]
+            
+            if bids:
+                last_bid = bids[-1]
+                quantity, face = last_bid.split('-')
+                return f'"{quantity}-{face}" (claiming at least {quantity} dice showing {face} across all players)'
             else:
                 return None
-        except:
+        except Exception as e:
             return None
+    
+    def _extract_bid_details(self, bid_str: str) -> tuple:
+        """Extract quantity and face from bid string like '"2-3" (claiming...)' -> (2, '3')"""
+        try:
+            # Extract the bid part "2-3" from the full description
+            if '"' in bid_str:
+                bid_part = bid_str.split('"')[1]  # "2-3"
+                quantity, face = bid_part.split('-')  # "2", "3"
+                return (int(quantity), face)
+            return (None, None)
+        except:
+            return (None, None)
+    
+    def _count_matching_dice(self, dice_str: str, face: str) -> int:
+        """Count how many dice match the bid face (including 6s as wild)"""
+        try:
+            # Extract dice values from string like "[3, 6] (showing: 3, 6)"
+            if '[' in dice_str and ']' in dice_str:
+                dice_part = dice_str.split('[')[1].split(']')[0]
+                dice = [d.strip() for d in dice_part.split(',')]
+                
+                # Count matches: either the exact face or 6 (wild)
+                count = sum(1 for d in dice if d == face or d == '6')
+                return count
+            return 0
+        except:
+            return 0
     
     def _get_num_dice_per_player(self, state: pyspiel.State, player_id: int) -> int:
         """Get number of dice per player from information state"""

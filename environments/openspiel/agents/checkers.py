@@ -9,7 +9,7 @@ from typing import Dict, Any
 
 
 class CheckersAgent(BaseGameAgent):
-    """Checkers Game Agent - Uses default observation_string formatting"""
+    """Checkers Game Agent"""
     
     @property
     def game_name(self) -> str:
