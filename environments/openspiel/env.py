@@ -118,7 +118,6 @@ class Actor:
                 ),
                 rng_seed=seed + 1,
                 agent=agent,
-                max_parsing_retries=3,
             )
 
             # Create bots for all players
@@ -175,11 +174,30 @@ class Actor:
             from llm_bot import ParsingError
 
             error_type = type(e).__name__
+            
+            # Special handling for ParsingError: treat as successful sampling with 0 score
+            # The error is already recorded in conversation history by llm_bot
+            if isinstance(e, ParsingError):
+                print(f"[ParsingError] Game ended due to parsing failure - treating as valid sample with 0 score")
+                return self._build_result(
+                    game_name=game_name,
+                    score=0.0,
+                    llm_return=None,
+                    llm_player_id=llm_player_id,
+                    task_id=task_id,
+                    seed=seed,
+                    opponent=opponent,
+                    start_time=start_time,
+                    conversation=llm_bot.get_conversation() if llm_bot else [],
+                    error=None,  # No error field - this is a valid sample
+                    usage=llm_bot.get_total_usage() if llm_bot else None,
+                    all_returns=None,
+                )
+            
+            # Other exceptions: true errors
             # Try to get detailed error from llm_bot first
             if llm_bot and llm_bot.get_last_error():
                 error_msg = llm_bot.get_last_error()
-            elif isinstance(e, ParsingError):
-                error_msg = f"[PARSING_ERROR] {str(e)}"
             else:
                 error_msg = f"[{error_type}] {str(e)}\n{traceback.format_exc()}"
 

@@ -49,7 +49,7 @@ Winning: Player with most points after all rounds wins."""
         win_seq_match = re.search(r'Win sequence:\s+([-\d\s]+)', obs)
         if win_seq_match:
             win_seq = win_seq_match.group(1).strip()
-            explanation = "\n(Win sequence: 1=player 0 won, 0=player 1 won, negative=tie)"
+            explanation = "\n(Win sequence: 1=player 1 won, 0=player 0 won, negative=tie)"
             obs = obs.replace(f'Win sequence: {win_seq}', f'Win sequence: {win_seq}{explanation}')
         
         return obs

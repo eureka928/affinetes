@@ -186,11 +186,8 @@ Winning: If you call Liar and previous bid was false, opponent loses. If bid was
     def generate_params(self, config_id: int) -> Dict[str, Any]:
         """
         Generate Liar's Dice parameters
-        
-        Config space: 5 variants (1-5 dice per player)
         """
-        dice_var = config_id % 5
         return {
             "players": 2,
-            "numdice": 1 + dice_var  # 1, 2, 3, 4, 5
+            "numdice": 5
         }
