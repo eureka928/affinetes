@@ -65,7 +65,7 @@ Hand ranking (high to low): Pair (private + public match) > High card value (K >
             # 2. Public card (if round 2)
             if public_card and public_card != "-10000":
                 card_name = self._card_id_to_name(int(public_card), state.num_players())
-                state_parts.append(f"Community card: {card_name}")
+                state_parts.append(f"Public card: {card_name}")
                 
                 # Check for pair
                 if private_card and private_card != "-10000":
