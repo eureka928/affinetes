@@ -272,7 +272,16 @@ class Actor:
         return float(score)
 
     def _create_opponent_bot(self, opponent, player_id, seed, game):
-        """Create opponent bot based on type"""
+        """Create opponent bot based on type and game dynamics"""
+        game_type = game.get_type()
+        
+        # For simultaneous move games, MCTS doesn't work - fallback to random
+        if game_type.dynamics == pyspiel.GameType.Dynamics.SIMULTANEOUS:
+            return uniform_random.UniformRandomBot(
+                player_id=player_id, rng=np.random.RandomState(seed + 2)
+            )
+        
+        # For sequential games, use requested opponent type
         if opponent == "random":
             return uniform_random.UniformRandomBot(
                 player_id=player_id, rng=np.random.RandomState(seed + 2)

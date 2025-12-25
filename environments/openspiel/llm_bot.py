@@ -196,13 +196,21 @@ class LLMBot(pyspiel.Bot):
         
         # Strategy 1: Pure number (highest priority)
         if match := re.search(r'^\s*(\d+)\s*$', response_clean):
-            action = int(match.group(1))
-            return self._create_parse_result(
-                action in legal_actions,
-                action if action in legal_actions else None,
-                '' if action in legal_actions else f"Number {action} not in legal actions: {legal_actions}",
-                'pure_number' if action in legal_actions else 'number_invalid'
-            )
+            try:
+                action = int(match.group(1))
+                return self._create_parse_result(
+                    action in legal_actions,
+                    action if action in legal_actions else None,
+                    '' if action in legal_actions else f"Number {action} not in legal actions: {legal_actions}",
+                    'pure_number' if action in legal_actions else 'number_invalid'
+                )
+            except ValueError as e:
+                # Model generated invalid number (e.g., too large for int conversion)
+                return self._create_parse_result(
+                    False, None,
+                    f"Cannot convert to integer: {str(e)}. Model generated invalid action.",
+                    'number_conversion_error'
+                )
         
         # Strategy 2: Find legal action ID in text
         for action in legal_actions:
