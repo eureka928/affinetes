@@ -204,7 +204,7 @@ class OperationGenerator:
         # Evaluate expression
         result, simplified_expr = self._evaluate_expression(expression, symbol_definitions)
 
-        if isinstance(result, str) and (result == "计算超时" or result == "计算错误"):
+        if isinstance(result, str) and (result == "evaluation_timeout" or result == "evaluation_error"):
             return None
 
         # Format question
@@ -359,7 +359,7 @@ class OperationGenerator:
                 return result, simplified_expr
 
         except Exception:
-            return "计算错误", ""
+            return "evaluation_error", ""
 
     def _simplify_mix_expression(self, expression, symbol_definitions):
         """Simplify expression with custom operators"""
