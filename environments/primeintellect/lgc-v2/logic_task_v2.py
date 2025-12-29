@@ -31,8 +31,8 @@ class LogicTaskV2:
             "class": "DyckLanguageGenerator",
             "default_config": {
                 "n_types": 3,
-                "total_length": 20,
-                "to_fill_length": 10,
+                "total_length": 0,      # 0 = random (60-120)
+                "to_fill_length": 0,    # 0 = random (20%-50% of total)
                 "nesting_depth": 2
             }
         },
