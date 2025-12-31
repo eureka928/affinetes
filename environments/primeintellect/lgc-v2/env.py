@@ -18,7 +18,7 @@ from logic_task_v2 import LogicTaskV2
 class Actor:
     """Logic V2 task evaluation actor with seed-based generation"""
 
-    def __init__(self, api_key: str = None, task_configs: dict = None, max_cache_size: int = 10000):
+    def __init__(self, api_key: str = None, task_configs: dict = None, max_cache_size: int = 1000, max_client_cache: int = 200):
         """
         Initialize Actor with API key and task configurations
 
@@ -26,16 +26,31 @@ class Actor:
             api_key: API key for LLM service. If not provided, will use CHUTES_API_KEY env var
             task_configs: Optional dict of task-specific configurations
                          Format: {"dyck_language": {"n_types": 4, "total_length": 20}}
-            max_cache_size: Maximum number of challenges to cache (default: 10000)
-                           Set to 0 to disable caching
+            max_cache_size: Maximum number of challenges to cache (default: 1000)
+            max_client_cache: Maximum number of OpenAI clients to cache (default: 200)
+                             Prevents unlimited growth when using multiple base_urls
         """
         self.api_key = api_key or os.getenv("CHUTES_API_KEY")
 
         # Initialize logic task V2 instance with caching
         self.logic_task = LogicTaskV2(task_configs=task_configs, max_cache_size=max_cache_size)
 
-    async def _llm_chat(self, prompt, model, base_url, timeout, temperature, current_api_key, seed=None):
-        """Call LLM API with specified API key and optional seed (streaming mode)"""
+        # Reusable OpenAI client to avoid connection leaks (LRU cache with size limit)
+        from collections import OrderedDict
+        self._client_cache = OrderedDict()
+        self._max_client_cache = max_client_cache
+
+    def _get_or_create_client(self, base_url, current_api_key, timeout):
+        """Get cached client or create new one with LRU eviction to avoid connection leaks"""
+        # Create cache key based on base_url and api_key
+        cache_key = f"{base_url}:{current_api_key[:10]}"
+
+        # If client exists, move to end (mark as recently used)
+        if cache_key in self._client_cache:
+            self._client_cache.move_to_end(cache_key)
+            return self._client_cache[cache_key]
+
+        # Create new client
         # Unset SSL_CERT_FILE to avoid certificate path issues in container
         os.environ.pop('SSL_CERT_FILE', None)
         os.environ.pop('REQUESTS_CA_BUNDLE', None)
@@ -46,6 +61,22 @@ class Actor:
             timeout=httpx.Timeout(timeout),
             max_retries=0
         )
+
+        self._client_cache[cache_key] = client
+
+        # Evict oldest client if cache is full (LRU)
+        if len(self._client_cache) > self._max_client_cache:
+            oldest_key, oldest_client = self._client_cache.popitem(last=False)
+            # Note: We don't await close() here since it's sync method
+            # The client will be garbage collected and connections will eventually close
+            # For proper cleanup, consider using async cleanup in Actor.__del__ or cleanup method
+
+        return client
+
+    async def _llm_chat(self, prompt, model, base_url, timeout, temperature, current_api_key, seed=None):
+        """Call LLM API with specified API key and optional seed (streaming mode)"""
+        # Reuse client to avoid connection leaks
+        client = self._get_or_create_client(base_url, current_api_key, timeout)
 
         # Prepare API call parameters with streaming enabled
         params = {
@@ -66,25 +97,30 @@ class Actor:
         content_parts = []
         usage = None
 
-        async for chunk in stream:
-            # Collect content chunks
-            if chunk.choices and chunk.choices[0].delta.content:
-                content_parts.append(chunk.choices[0].delta.content)
+        try:
+            async for chunk in stream:
+                # Collect content chunks
+                if chunk.choices and chunk.choices[0].delta.content:
+                    content_parts.append(chunk.choices[0].delta.content)
 
-            # Collect usage information from the final chunk
-            if chunk.usage:
-                usage = chunk.usage.model_dump()
+                # Collect usage information from the final chunk
+                if chunk.usage:
+                    usage = chunk.usage.model_dump()
 
-        # Combine all content parts
-        if not content_parts:
-            raise ValueError("LLM API returned empty content stream")
+            # Combine all content parts
+            if not content_parts:
+                raise ValueError("LLM API returned empty content stream")
 
-        content = "".join(content_parts)
-        if not content:
-            raise ValueError("LLM API returned None content (possible content filtering or API error)")
+            content = "".join(content_parts)
+            if not content:
+                raise ValueError("LLM API returned None content (possible content filtering or API error)")
 
-        # Return both content and usage information
-        return content.strip(), usage
+            # Return both content and usage information
+            return content.strip(), usage
+
+        finally:
+            # Critical: Close stream to return connection to pool
+            await stream.response.aclose()
 
     async def evaluate(
         self,
