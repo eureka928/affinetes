@@ -58,7 +58,12 @@ class Actor:
         client = openai.AsyncOpenAI(
             base_url=base_url.rstrip('/'),
             api_key=current_api_key,
-            timeout=httpx.Timeout(timeout),
+            timeout=httpx.Timeout(
+                connect=10.0,  # Connection timeout
+                read=20.0,     # Read timeout (per chunk)
+                write=10.0,    # Write timeout
+                pool=10.0      # Pool timeout
+            ),
             max_retries=0
         )
 
@@ -77,10 +82,8 @@ class Actor:
         """Call LLM API with specified API key and optional seed (streaming mode)"""
         import asyncio
 
-        # Use 20s timeout for streaming to avoid hanging
-        stream_timeout = 20.0
-        # Create client with 20s timeout to enforce fast failure
-        client = self._get_or_create_client(base_url, current_api_key, stream_timeout)
+        # Get client (timeout is configured in httpx.Timeout when creating client)
+        client = self._get_or_create_client(base_url, current_api_key, timeout)
 
         # Prepare API call parameters with streaming enabled
         params = {
@@ -95,33 +98,17 @@ class Actor:
         if seed is not None:
             params["seed"] = seed
 
-        # Create stream with 20s timeout for initial connection
-        try:
-            stream = await asyncio.wait_for(
-                client.chat.completions.create(**params),
-                timeout=20.0
-            )
-        except asyncio.TimeoutError:
-            raise TimeoutError("Stream timeout: failed to establish connection within 20 seconds")
+        # Create stream (httpx client already has 20s read timeout configured)
+        stream = await client.chat.completions.create(**params)
 
         # Collect streamed content and usage
         content_parts = []
         usage = None
+        chunk_count = 0
 
         try:
-            # Stream with 20s timeout for each chunk using async generator wrapper
-            async def stream_with_timeout():
-                stream_iter = stream.__aiter__()
-                while True:
-                    try:
-                        chunk = await asyncio.wait_for(stream_iter.__anext__(), timeout=20.0)
-                        yield chunk
-                    except StopAsyncIteration:
-                        break
-                    except asyncio.TimeoutError:
-                        raise TimeoutError("Stream timeout: no new data received for 20 seconds")
-
-            async for chunk in stream_with_timeout():
+            async for chunk in stream:
+                chunk_count += 1
                 # Collect content chunks
                 if chunk.choices and chunk.choices[0].delta.content:
                     content_parts.append(chunk.choices[0].delta.content)
@@ -132,7 +119,11 @@ class Actor:
 
             # Combine all content parts
             if not content_parts:
-                raise ValueError("LLM API returned empty content stream")
+                # Provide detailed error info for debugging
+                error_msg = f"LLM API returned empty content stream (received {chunk_count} chunks, no content)"
+                if chunk_count == 0:
+                    error_msg += " - Stream may have been closed immediately"
+                raise ValueError(error_msg)
 
             content = "".join(content_parts)
             if not content:
@@ -143,7 +134,18 @@ class Actor:
 
         finally:
             # Critical: Close stream to return connection to pool
-            await stream.response.aclose()
+            # Use timeout protection to avoid hanging on close
+            try:
+                await asyncio.wait_for(stream.response.aclose(), timeout=5.0)
+            except asyncio.TimeoutError:
+                # If close hangs, log and continue to avoid blocking error propagation
+                # The connection will be cleaned up by garbage collector
+                import logging
+                logging.warning("Stream close timed out after 5s, connection may leak")
+            except Exception as e:
+                # Best effort cleanup - don't let close failure block error propagation
+                import logging
+                logging.debug(f"Stream close failed: {e}")
 
     async def evaluate(
         self,
