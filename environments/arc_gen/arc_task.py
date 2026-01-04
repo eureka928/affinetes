@@ -31,7 +31,8 @@ class ArcGenTask:
     def _select_task_num(self, task_id: Optional[int], rng: random.Random) -> int:
         if task_id is None:
             return rng.choice(self._task_nums)
-        return self._task_nums[task_id % len(self._task_nums)]
+        idx = (int(task_id) - 1) % len(self._task_nums)
+        return self._task_nums[idx]
 
     @staticmethod
     def _example_seed(seed: int, task_num: int, example_idx: int) -> int:
@@ -70,12 +71,13 @@ class ArcGenTask:
     async def generate(
         self,
         task_id: Optional[int] = None,
-        seed: Optional[int] = None,
         num_train: Optional[int] = None,
         num_test: Optional[int] = None,
     ) -> Challenge:
-        if seed is None:
-            seed = random.randint(0, 2**32 - 1)
+        if task_id is not None:
+            generation_seed = int(task_id)
+        else:
+            generation_seed = random.randint(0, 2**32 - 1)
         if num_train is None:
             num_train = self.num_train
         if num_test is None:
@@ -83,11 +85,11 @@ class ArcGenTask:
         if num_test < 1:
             raise ValueError("num_test must be >= 1")
 
-        rng = random.Random(seed)
+        rng = random.Random(generation_seed)
         task_num = self._select_task_num(task_id, rng)
         task_uid, generator, _ = self._tasks[task_num]
 
-        examples = self._generate_examples(generator, seed, task_num, num_train + num_test)
+        examples = self._generate_examples(generator, generation_seed, task_num, num_train + num_test)
         train_examples = examples[:num_train]
         test_examples = examples[num_train:num_train + num_test]
         test_example = test_examples[0]
@@ -101,7 +103,7 @@ class ArcGenTask:
                 "task_num": task_num,
                 "task_uid": task_uid,
                 "task_id": task_id,
-                "seed": seed,
+                "generation_seed": generation_seed,
                 "expected_output": test_example["output"],
             },
         )
