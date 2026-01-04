@@ -1,6 +1,7 @@
 """CLI command implementations"""
 
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -256,6 +257,17 @@ def _create_http_based_env(env_path: Path) -> None:
     logger.info(f"  Created: Dockerfile")
 
 
+def _generate_seed(env_name: str, task_id: int) -> int:
+    """Generate deterministic seed from env_name and task_id
+
+    Uses the same algorithm as affine system:
+    SHA256(env_name:task_id) % 2^32
+    """
+    seed_string = f"{env_name}:{task_id}"
+    hash_bytes = hashlib.sha256(seed_string.encode()).digest()[:8]
+    return int.from_bytes(hash_bytes, byteorder='big') % (2**32)
+
+
 async def test_environment(
     env_dir: str,
     num_tests: int,
@@ -375,22 +387,30 @@ async def test_environment(
             seed_consistency_failures = 0
             all_prompts = {}  # Track all prompts to verify diversity
 
+            # Get environment name from path
+            env_name = env_path.name
+
             for i, task_id in enumerate(range(task_id_start, task_id_end + 1)):
 
                 try:
+                    # Generate deterministic seed from task_id (same as affine system)
+                    seed = _generate_seed(env_name, task_id)
+
                     # Run same task_id twice to validate seed consistency
                     # First evaluation
                     result1 = await env.evaluate(
                         task_id=task_id,
+                        seed=seed,
                         base_url=use_base_url,
                         temperature=temperature,
                         timeout=timeout,
                         _timeout=timeout + 10
                     )
 
-                    # Second evaluation with same task_id
+                    # Second evaluation with same task_id and seed
                     result2 = await env.evaluate(
                         task_id=task_id,
+                        seed=seed,
                         base_url=use_base_url,
                         temperature=temperature,
                         timeout=timeout,
