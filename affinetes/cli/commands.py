@@ -365,7 +365,7 @@ async def test_environment(
 
         # Test: Generate tests with seed consistency validation
         logger.info(f"\nRunning {num_tests} tests with task_id range [{task_id_start}, {task_id_end}]")
-        logger.info("Each test runs twice to validate seed consistency")
+        logger.info("Each test runs twice with different seeds to validate that problem generation only depends on task_id")
         logger.info("-"*80)
 
         try:
@@ -393,31 +393,31 @@ async def test_environment(
             for i, task_id in enumerate(range(task_id_start, task_id_end + 1)):
 
                 try:
-                    # Generate deterministic seed from task_id (same as affine system)
-                    seed = _generate_seed(env_name, task_id)
+                    # Generate two different seeds for same task_id
+                    seed1 = _generate_seed(env_name, task_id)
+                    seed2 = _generate_seed(env_name, task_id + 100000)  # Different seed for same task_id
 
-                    # Run same task_id twice to validate seed consistency
-                    # First evaluation
+                    # First evaluation with seed1
                     result1 = await env.evaluate(
                         task_id=task_id,
-                        seed=seed,
+                        seed=seed1,
                         base_url=use_base_url,
                         temperature=temperature,
                         timeout=timeout,
                         _timeout=timeout + 10
                     )
 
-                    # Second evaluation with same task_id and seed
+                    # Second evaluation with same task_id but different seed
                     result2 = await env.evaluate(
                         task_id=task_id,
-                        seed=seed,
+                        seed=seed2,
                         base_url=use_base_url,
                         temperature=temperature,
                         timeout=timeout,
                         _timeout=timeout + 10
                     )
 
-                    # Check seed consistency (same question should be generated)
+                    # Check seed consistency (same task_id should generate same question regardless of seed)
                     conv1 = result1.get("extra", {}).get("conversation", [])
                     conv2 = result2.get("extra", {}).get("conversation", [])
 
@@ -428,7 +428,7 @@ async def test_environment(
 
                     if not seed_consistent:
                         seed_consistency_failures += 1
-                        logger.warning(f"Test {task_id}: Seed inconsistency detected!")
+                        logger.warning(f"Test {task_id}: Same task_id generated different prompts with different seeds! (seed1={seed1}, seed2={seed2})")
 
                     # Track prompt for diversity check
                     all_prompts[task_id] = prompt1
@@ -436,6 +436,8 @@ async def test_environment(
                     # Use first result for rollout, but add seed consistency info
                     result = result1
                     result["seed_consistent"] = seed_consistent
+                    result["extra"]["seed1"] = seed1
+                    result["extra"]["seed2"] = seed2
                     result["extra"]["second_run"] = {
                         "score": result2.get("score"),
                         "success": result2.get("success")
@@ -498,15 +500,15 @@ async def test_environment(
             logger.info(f"\n✓ Completed {num_tests} tests")
             logger.info(f"Output directory: {output_dir}/")
             logger.info(f"Success rate: {success_count}/{num_tests} ({success_count/num_tests*100:.1f}%)")
-            logger.info(f"Seed consistency: {num_tests - seed_consistency_failures}/{num_tests} ({(num_tests - seed_consistency_failures)/num_tests*100:.1f}%)")
-            logger.info(f"Seed diversity: {unique_prompts}/{total_prompts} unique questions ({seed_diversity_rate*100:.1f}%)")
+            logger.info(f"Task-ID consistency: {num_tests - seed_consistency_failures}/{num_tests} ({(num_tests - seed_consistency_failures)/num_tests*100:.1f}%)")
+            logger.info(f"Task-ID diversity: {unique_prompts}/{total_prompts} unique questions ({seed_diversity_rate*100:.1f}%)")
 
             if seed_consistency_failures > 0:
-                logger.warning(f"\n⚠️  {seed_consistency_failures} tests had seed inconsistency!")
+                logger.warning(f"\n⚠️  {seed_consistency_failures} task_ids generated different problems (not solely depending on task_id)!")
 
             if seed_diversity_rate < 1.0:
                 duplicate_count = total_prompts - unique_prompts
-                logger.warning(f"\n⚠️  {duplicate_count} duplicate questions detected (different seeds generated same question)!")
+                logger.warning(f"\n⚠️  {duplicate_count} duplicate questions detected (different task_ids generated same question)!")
 
             # Pass validation if both consistency and diversity are perfect
             validation_passed = (seed_consistency_failures == 0 and seed_diversity_rate == 1.0)
@@ -526,7 +528,7 @@ async def test_environment(
         if all(results):
             logger.info("✓ All validations passed!")
         else:
-            logger.error("✗ Validation failed - check seed consistency")
+            logger.error("✗ Validation failed - problem generation does not solely depend on task_id")
 
     except Exception as e:
         logger.error(f"Failed to run tests: {e}")
