@@ -251,6 +251,7 @@ class LLMBot(pyspiel.Bot):
             max_retries = 10
             for attempt in range(max_retries):
                 try:
+                    content_parts.clear()  # Clear previous attempt's data
                     async with client.stream("POST", "/chat/completions", json=payload) as response:
                         response.raise_for_status()
                         
@@ -271,6 +272,14 @@ class LLMBot(pyspiel.Bot):
                                 # Extract usage
                                 if "usage" in chunk_data:
                                     usage = chunk_data["usage"]
+                    
+                    # Check if we got valid content
+                    if not content_parts:
+                        raise ValueError("LLM API returned empty content stream")
+                    
+                    content = "".join(content_parts)
+                    if not content:
+                        raise ValueError("LLM API returned None content")
                     
                     break  # Success, exit retry loop
                     
@@ -294,13 +303,17 @@ class LLMBot(pyspiel.Bot):
                         await asyncio.sleep(wait_time)
                     else:
                         raise ValueError(f"API call failed after {max_retries} retries: {e}") from e
-
-            if not content_parts:
-                raise ValueError("LLM API returned empty content stream")
-
-            content = "".join(content_parts)
-            if not content:
-                raise ValueError("LLM API returned None content")
+                except ValueError as e:
+                    # Retry on empty content errors
+                    if "empty content stream" in str(e) or "None content" in str(e):
+                        if attempt < max_retries - 1:
+                            wait_time = min(2 ** attempt, 32)
+                            await asyncio.sleep(wait_time)
+                        else:
+                            raise ValueError(f"API call failed after {max_retries} retries: {e}")
+                    else:
+                        # Re-raise other ValueError immediately
+                        raise
 
             return content.strip(), usage
         finally:
