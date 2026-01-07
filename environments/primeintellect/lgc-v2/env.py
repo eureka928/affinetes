@@ -103,6 +103,7 @@ class Actor:
 
         # Collect streamed content and usage
         content_parts = []
+        reasoning_parts = []  # Collect reasoning content for o1-style models
         usage = None
         chunk_count = 0
         max_chunks = 32000  # Limit output to ~32k tokens (assuming ~1 chunk per token)
@@ -111,7 +112,7 @@ class Actor:
         try:
             # Create async iterator from stream
             chunk_iter = stream.__aiter__()
-            
+
             while True:
                 try:
                     # Wait for next chunk with timeout
@@ -120,11 +121,21 @@ class Actor:
                     break
                 except asyncio.TimeoutError:
                     raise TimeoutError(f"Stream timeout: no chunk received for {chunk_timeout}s")
-                
+
                 chunk_count += 1
-                # Collect content chunks
-                if chunk.choices and chunk.choices[0].delta.content:
-                    content_parts.append(chunk.choices[0].delta.content)
+
+                # Collect content chunks and reasoning chunks
+                if chunk.choices and chunk.choices[0].delta:
+                    delta = chunk.choices[0].delta
+
+                    # Collect regular content
+                    if delta.content:
+                        content_parts.append(delta.content)
+
+                    # Collect reasoning content (for o1-style reasoning models)
+                    if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
+                        reasoning_parts.append(delta.reasoning_content)
+
                     # Apply chunk limit (approximate token limit)
                     if chunk_count >= max_chunks:
                         break
@@ -135,15 +146,14 @@ class Actor:
 
             # Combine all content parts
             if not content_parts:
-                # Provide detailed error info for debugging
-                error_msg = f"LLM API returned empty content stream (received {chunk_count} chunks, no content)"
-                if chunk_count == 0:
-                    error_msg += " - Stream may have been closed immediately"
-                raise ValueError(error_msg)
+                # Return None for empty content (e.g., reasoning-only models)
+                # This will result in 0 score rather than raising an error
+                return None, usage
 
             content = "".join(content_parts)
             if not content:
-                raise ValueError("LLM API returned None content (possible content filtering or API error)")
+                # Return None for empty content (e.g., reasoning-only models)
+                return None, usage
 
             # Return both content and usage information
             return content.strip(), usage
