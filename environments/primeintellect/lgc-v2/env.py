@@ -105,13 +105,25 @@ class Actor:
         content_parts = []
         usage = None
         chunk_count = 0
+        max_chunks = 32000  # Limit output to ~32k tokens (assuming ~1 chunk per token)
+        chunk_timeout = 30.0  # Max time between chunks
 
         try:
+            last_chunk_time = time.time()
             async for chunk in stream:
+                # Check if time between chunks exceeds timeout
+                current_time = time.time()
+                if current_time - last_chunk_time > chunk_timeout:
+                    raise TimeoutError(f"Stream timeout: no chunk received for {chunk_timeout}s")
+                last_chunk_time = current_time
+                
                 chunk_count += 1
                 # Collect content chunks
                 if chunk.choices and chunk.choices[0].delta.content:
                     content_parts.append(chunk.choices[0].delta.content)
+                    # Apply chunk limit (approximate token limit)
+                    if chunk_count >= max_chunks:
+                        break
 
                 # Collect usage information from the final chunk
                 if chunk.usage:

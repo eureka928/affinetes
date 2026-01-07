@@ -252,10 +252,22 @@ class LLMBot(pyspiel.Bot):
             for attempt in range(max_retries):
                 try:
                     content_parts.clear()  # Clear previous attempt's data
+                    chunk_count = 0
+                    max_chunks = 32000  # Limit output to ~32k tokens
+                    chunk_timeout = 30.0  # Max time between chunks
+                    
                     async with client.stream("POST", "/chat/completions", json=payload) as response:
                         response.raise_for_status()
                         
+                        import time
+                        last_chunk_time = time.time()
+                        
                         async for line in response.aiter_lines():
+                            # Check chunk timeout
+                            current_time = time.time()
+                            if current_time - last_chunk_time > chunk_timeout:
+                                raise TimeoutError(f"Stream timeout: no chunk received for {chunk_timeout}s")
+                            
                             if not line.strip() or line.strip() == "data: [DONE]":
                                 continue
                             
@@ -268,6 +280,12 @@ class LLMBot(pyspiel.Bot):
                                     delta = chunk_data["choices"][0].get("delta", {})
                                     if "content" in delta and delta["content"]:
                                         content_parts.append(delta["content"])
+                                        chunk_count += 1
+                                        last_chunk_time = current_time  # Update last chunk time
+                                        
+                                        # Apply chunk limit
+                                        if chunk_count >= max_chunks:
+                                            break
                                 
                                 # Extract usage
                                 if "usage" in chunk_data:
@@ -283,7 +301,8 @@ class LLMBot(pyspiel.Bot):
                     
                     break  # Success, exit retry loop
                     
-                except (httpx.TimeoutException, httpx.NetworkError) as e:
+                except (httpx.TimeoutException, httpx.NetworkError, TimeoutError) as e:
+                    # TimeoutError from chunk timeout should also trigger retry
                     if attempt < max_retries - 1:
                         wait_time = min(2 ** attempt, 32)  # Exponential backoff, max 32s
                         await asyncio.sleep(wait_time)
@@ -326,14 +345,24 @@ class LLMBot(pyspiel.Bot):
         This prevents conversation history from being polluted with
         model's internal reasoning, keeping only the final answer.
         
+        Handles truncated outputs where closing </think> tag may be missing.
+        
         Args:
             text: Raw response text potentially containing <think> tags
             
         Returns:
             Cleaned text with <think> blocks removed
         """
-        # Remove <think>...</think> blocks (non-greedy match, case-insensitive)
+        # Remove complete <think>...</think> blocks (non-greedy match, case-insensitive)
         cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Handle truncated <think> blocks (opening tag without closing tag)
+        # This can happen when output is cut off at 32k chunks
+        # After removing complete blocks, if there's still a <think> tag, it must be unclosed
+        match = re.search(r'<think>', cleaned, flags=re.IGNORECASE)
+        if match:
+            # Remove everything from the unclosed <think> tag onwards
+            cleaned = cleaned[:match.start()]
         
         # Clean up extra whitespace created by removal
         cleaned = re.sub(r'\n\s*\n\s*\n', '\n\n', cleaned)  # Multiple blank lines -> double newline
