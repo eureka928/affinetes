@@ -50,7 +50,7 @@ class Actor:
 
         content = response.choices[0].message.content
         if content is None:
-            # Return None for empty content (e.g., reasoning-only models)
+            # Return None for empty content (e.g., token limit exhausted during reasoning)
             # This will result in 0 score rather than raising an error
             return None
 

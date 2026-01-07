@@ -146,13 +146,13 @@ class Actor:
 
             # Combine all content parts
             if not content_parts:
-                # Return None for empty content (e.g., reasoning-only models)
+                # Return None for empty content (e.g., token limit exhausted during reasoning)
                 # This will result in 0 score rather than raising an error
                 return None, usage
 
             content = "".join(content_parts)
             if not content:
-                # Return None for empty content (e.g., reasoning-only models)
+                # Return None for empty content (e.g., token limit exhausted during reasoning)
                 return None, usage
 
             # Return both content and usage information
