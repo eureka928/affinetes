@@ -109,13 +109,17 @@ class Actor:
         chunk_timeout = 30.0  # Max time between chunks
 
         try:
-            last_chunk_time = time.time()
-            async for chunk in stream:
-                # Check if time between chunks exceeds timeout
-                current_time = time.time()
-                if current_time - last_chunk_time > chunk_timeout:
+            # Create async iterator from stream
+            chunk_iter = stream.__aiter__()
+            
+            while True:
+                try:
+                    # Wait for next chunk with timeout
+                    chunk = await asyncio.wait_for(chunk_iter.__anext__(), timeout=chunk_timeout)
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
                     raise TimeoutError(f"Stream timeout: no chunk received for {chunk_timeout}s")
-                last_chunk_time = current_time
                 
                 chunk_count += 1
                 # Collect content chunks
