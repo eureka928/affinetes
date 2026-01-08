@@ -217,119 +217,125 @@ class Actor:
         game_name = "unknown"
         llm_bot = None
         mcts_bots = []  # Track MCTS bots for timing stats
-        
+        logger = None
+
         # Set internal timeout to be 20 seconds earlier than task timeout
         # This allows us to gracefully finish and return partial results
         internal_timeout = max(task_timeout - 20, task_timeout * 0.9)
-        
+
         try:
             game, game_config = create_game(task_id)
             game_name = game_config["game_name"]
 
-            # Create request logger context after game_name is determined
-            with RequestLogger(
+            # Setup logging after game_name is determined
+            logger = RequestLogger(
                 task_id=task_id,
                 task_type=game_name,
                 seed=seed,
                 model=model,
                 base_url=base_url,
                 opponent=opponent
-            ):
-                log_event("game_created", game_name=game_name)
+            )
+            logger.__enter__()
+            log_event("game_created", game_name=game_name)
+            num_players = game.num_players()
+            llm_player_id = llm_player_id % num_players
 
-                num_players = game.num_players()
-                llm_player_id = llm_player_id % num_players
+            # Get agent for this game
+            agent_class = GAME_AGENTS.get(game_name)
+            if not agent_class:
+                raise ValueError(f"No agent found for game: {game_name}")
+            
+            agent = agent_class()
 
-                # Get agent for this game
-                agent_class = GAME_AGENTS.get(game_name)
-                if not agent_class:
-                    raise ValueError(f"No agent found for game: {game_name}")
+            llm_bot = LLMBot(
+                game=game,
+                player_id=llm_player_id,
+                base_url=base_url,
+                api_key=current_api_key,
+                model=model,
+                temperature=temperature,
+                rng_seed=seed + 1,
+                agent=agent,
+                seed=seed,
+                executor=self.executor,
+            )
 
-                agent = agent_class()
+            # Create bots for all players
+            bots = []
+            for player_id in range(num_players):
+                if player_id == llm_player_id:
+                    bots.append(llm_bot)
+                else:
+                    opponent_bot = self._create_opponent_bot(
+                        opponent, player_id, seed + 2 + player_id, game, agent
+                    )
+                    # Track TimedMCTSBot instances
+                    if isinstance(opponent_bot, TimedMCTSBot):
+                        mcts_bots.append(opponent_bot)
+                    bots.append(opponent_bot)
 
-                llm_bot = LLMBot(
-                    game=game,
-                    player_id=llm_player_id,
-                    base_url=base_url,
-                    api_key=current_api_key,
-                    model=model,
-                    temperature=temperature,
-                    rng_seed=seed + 1,
-                    agent=agent,
-                    seed=seed,
-                    executor=self.executor,
+            loop = asyncio.get_event_loop()
+            log_event("game_start", num_players=num_players, llm_player_id=llm_player_id)
+
+            # Run game evaluation with internal timeout (20s buffer before task timeout)
+            try:
+                returns = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        self.executor,
+                        evaluate_bots.evaluate_bots,
+                        game.new_initial_state(),
+                        bots,
+                        np.random.RandomState(seed),
+                    ),
+                    timeout=internal_timeout
                 )
-
-                # Create bots for all players
-                bots = []
-                for player_id in range(num_players):
-                    if player_id == llm_player_id:
-                        bots.append(llm_bot)
-                    else:
-                        opponent_bot = self._create_opponent_bot(
-                            opponent, player_id, seed + 2 + player_id, game, agent
-                        )
-                        # Track TimedMCTSBot instances
-                        if isinstance(opponent_bot, TimedMCTSBot):
-                            mcts_bots.append(opponent_bot)
-                        bots.append(opponent_bot)
-
-                loop = asyncio.get_event_loop()
-
-                log_event("game_start", num_players=num_players, llm_player_id=llm_player_id)
-
-                # Run game evaluation with internal timeout (20s buffer before task timeout)
-                try:
-                    returns = await asyncio.wait_for(
-                        loop.run_in_executor(
-                            self.executor,
-                            evaluate_bots.evaluate_bots,
-                            game.new_initial_state(),
-                            bots,
-                            np.random.RandomState(seed),
-                        ),
-                        timeout=internal_timeout
-                    )
-                    log_event("game_complete", returns=str(returns))
-                except asyncio.TimeoutError:
-                    # Internal timeout - game didn't complete in time
-                    log_event("game_timeout", level='warning', timeout_seconds=internal_timeout)
-                    elapsed = time.time() - start_time
-                    return self._build_result(
-                        game_name=game_name,
-                        llm_player_id=llm_player_id,
-                        task_id=task_id,
-                        seed=seed,
-                        opponent=opponent,
-                        start_time=start_time,
-                        error=f"Game incomplete: timeout after {elapsed:.1f}s (limit: {task_timeout}s)",
-                        llm_bot=llm_bot,
-                        mcts_bots=mcts_bots,
-                    )
-
-                # Game completed successfully
-                llm_return = returns[llm_player_id]
-                score = self._compute_score(returns, llm_player_id, game)
-                log_event("request_complete", score=score, llm_return=llm_return)
-
-                return self._build_result(
+                log_event("game_complete", returns=str(returns))
+            except asyncio.TimeoutError:
+                # Internal timeout - game didn't complete in time
+                log_event("game_timeout", level='warning', timeout_seconds=internal_timeout)
+                elapsed = time.time() - start_time
+                result = self._build_result(
                     game_name=game_name,
                     llm_player_id=llm_player_id,
                     task_id=task_id,
                     seed=seed,
                     opponent=opponent,
                     start_time=start_time,
-                    score=score,
-                    llm_return=llm_return,
-                    all_returns=returns,
-                    error=llm_bot.get_last_error() if llm_bot else None,
+                    error=f"Game incomplete: timeout after {elapsed:.1f}s (limit: {task_timeout}s)",
                     llm_bot=llm_bot,
                     mcts_bots=mcts_bots,
                 )
+                if logger:
+                    logger.__exit__(None, None, None)
+                return result
+
+            # Game completed successfully
+            llm_return = returns[llm_player_id]
+            score = self._compute_score(returns, llm_player_id, game)
+            log_event("request_complete", score=score, llm_return=llm_return)
+
+            result = self._build_result(
+                game_name=game_name,
+                llm_player_id=llm_player_id,
+                task_id=task_id,
+                seed=seed,
+                opponent=opponent,
+                start_time=start_time,
+                score=score,
+                llm_return=llm_return,
+                all_returns=returns,
+                error=llm_bot.get_last_error() if llm_bot else None,
+                llm_bot=llm_bot,
+                mcts_bots=mcts_bots,
+            )
+            if logger:
+                logger.__exit__(None, None, None)
+            return result
 
         except asyncio.TimeoutError:
             # Task timeout
-            return self._build_result(
+            result = self._build_result(
                 game_name=game_name,
                 llm_player_id=llm_player_id,
                 task_id=task_id,
@@ -340,6 +346,9 @@ class Actor:
                 llm_bot=llm_bot,
                 mcts_bots=mcts_bots,
             )
+            if logger:
+                logger.__exit__(None, None, None)
+            return result
 
         except Exception as e:
             import traceback
@@ -347,7 +356,7 @@ class Actor:
 
             # ParsingError: treat as valid sample with 0 score (no error field)
             if isinstance(e, ParsingError):
-                return self._build_result(
+                result = self._build_result(
                     game_name=game_name,
                     llm_player_id=llm_player_id,
                     task_id=task_id,
@@ -359,6 +368,9 @@ class Actor:
                     llm_bot=llm_bot,
                     mcts_bots=mcts_bots,
                 )
+                if logger:
+                    logger.__exit__(None, None, None)
+                return result
 
             # APIError or other exceptions: record as error
             if isinstance(e, APIError):
@@ -368,7 +380,7 @@ class Actor:
             else:
                 error_msg = f"[{type(e).__name__}] {str(e)}\n{traceback.format_exc()}"
 
-            return self._build_result(
+            result = self._build_result(
                 game_name=game_name,
                 llm_player_id=llm_player_id,
                 task_id=task_id,
@@ -379,6 +391,9 @@ class Actor:
                 llm_bot=llm_bot,
                 mcts_bots=mcts_bots,
             )
+            if logger:
+                logger.__exit__(None, None, None)
+            return result
 
     def _compute_score(self, returns, llm_player_idx, game):
         """
