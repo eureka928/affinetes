@@ -16,6 +16,21 @@ from llm_bot import LLMBot
 from game_config import create_game
 from agents import GAME_AGENTS
 
+# Import shared logging utilities
+try:
+    from affinetes.utils.request_logger import RequestLogger, log_event
+except ImportError:
+    # Fallback: minimal logging if shared module not available
+    class RequestLogger:
+        def __init__(self, **kwargs):
+            self.start_time = time.time()
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+    def log_event(event, **details):
+        pass
+
 
 class SafeRandomRolloutEvaluator(mcts.Evaluator):
     """
@@ -182,20 +197,29 @@ class Actor:
         current_api_key = api_key or self.api_key
         start_time = time.time()
 
-        return await asyncio.wait_for(
-            self._run_evaluation(
-                task_id,
-                seed,
-                model,
-                base_url,
-                temperature,
-                current_api_key,
-                opponent,
-                start_time,
-                timeout,
-            ),
-            timeout=timeout,
-        )
+        # Create request logger context
+        with RequestLogger(
+            task_id=task_id,
+            task_type="openspiel",
+            seed=seed,
+            model=model,
+            base_url=base_url,
+            opponent=opponent
+        ):
+            return await asyncio.wait_for(
+                self._run_evaluation(
+                    task_id,
+                    seed,
+                    model,
+                    base_url,
+                    temperature,
+                    current_api_key,
+                    opponent,
+                    start_time,
+                    timeout,
+                ),
+                timeout=timeout,
+            )
 
     async def _run_evaluation(
         self,
@@ -222,6 +246,8 @@ class Actor:
         try:
             game, game_config = create_game(task_id)
             game_name = game_config["game_name"]
+            log_event("game_created", game_name=game_name)
+
             num_players = game.num_players()
             llm_player_id = llm_player_id % num_players
 
@@ -229,7 +255,7 @@ class Actor:
             agent_class = GAME_AGENTS.get(game_name)
             if not agent_class:
                 raise ValueError(f"No agent found for game: {game_name}")
-            
+
             agent = agent_class()
 
             llm_bot = LLMBot(
@@ -260,7 +286,9 @@ class Actor:
                     bots.append(opponent_bot)
 
             loop = asyncio.get_event_loop()
-            
+
+            log_event("game_start", num_players=num_players, llm_player_id=llm_player_id)
+
             # Run game evaluation with internal timeout (20s buffer before task timeout)
             try:
                 returns = await asyncio.wait_for(
@@ -273,8 +301,10 @@ class Actor:
                     ),
                     timeout=internal_timeout
                 )
+                log_event("game_complete", returns=str(returns))
             except asyncio.TimeoutError:
                 # Internal timeout - game didn't complete in time
+                log_event("game_timeout", level='warning', timeout_seconds=internal_timeout)
                 elapsed = time.time() - start_time
                 return self._build_result(
                     game_name=game_name,
@@ -291,7 +321,8 @@ class Actor:
             # Game completed successfully
             llm_return = returns[llm_player_id]
             score = self._compute_score(returns, llm_player_id, game)
-            
+            log_event("request_complete", score=score, llm_return=llm_return)
+
             return self._build_result(
                 game_name=game_name,
                 llm_player_id=llm_player_id,

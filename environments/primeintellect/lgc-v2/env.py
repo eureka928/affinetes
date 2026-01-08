@@ -14,6 +14,68 @@ if '/app' not in sys.path:
 
 from logic_task_v2 import LogicTaskV2
 
+# Import shared logging utilities
+try:
+    from affinetes.utils.request_logger import RequestLogger, log_event
+except ImportError:
+    # Fallback for environments where affinetes is not installed
+    import logging
+    import structlog
+    from contextvars import ContextVar
+
+    structlog.configure(
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.processors.add_log_level,
+            structlog.processors.StackInfoRenderer(),
+            structlog.dev.set_exc_info,
+            structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S.%f", utc=False),
+            structlog.dev.ConsoleRenderer(colors=False)
+        ],
+        wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+        context_class=dict,
+        logger_factory=structlog.PrintLoggerFactory(),
+        cache_logger_on_first_use=True,
+    )
+
+    base_logger = structlog.get_logger("lgc-v2")
+    _request_logger: ContextVar = ContextVar('request_logger', default=None)
+
+    class RequestLogger:
+        def __init__(self, task_id, task_type, seed, model, base_url, game=None, trace=None):
+            import re
+            self.start_time = time.time()
+            slug_match = re.search(r'https?://([^./]+)\.chutes\.ai', base_url)
+            miner_slug = slug_match.group(1) if slug_match else base_url[:40]
+
+            ctx_parts = [f"task_id:{task_id}", f"type:{task_type}", f"seed:{seed}", f"miner:{miner_slug}", f"model:{model}"]
+            if game: ctx_parts.append(f"game:{game}")
+            if trace: ctx_parts.append(f"trace:{trace}")
+
+            self.logger = base_logger.bind(req_ctx="|".join(ctx_parts))
+
+        def log(self, event, level='info', **details):
+            elapsed_ms = int((time.time() - self.start_time) * 1000)
+            details['elapsed_ms'] = elapsed_ms
+            getattr(self.logger, level, self.logger.info)(event, **details)
+
+        def __enter__(self):
+            self.token = _request_logger.set(self)
+            self.log("request_start")
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            if exc_type:
+                self.log("request_error", level='error', error=str(exc_val), error_type=exc_type.__name__)
+            _request_logger.reset(self.token)
+
+    def log_event(event, level='info', **details):
+        logger_instance = _request_logger.get()
+        if logger_instance:
+            logger_instance.log(event, level=level, **details)
+        else:
+            base_logger.info(event, **details)
+
 
 class Actor:
     """Logic V2 task evaluation actor with seed-based generation"""
@@ -48,9 +110,12 @@ class Actor:
         # If client exists, move to end (mark as recently used)
         if cache_key in self._client_cache:
             self._client_cache.move_to_end(cache_key)
+            log_event("client_cache_hit", cache_size=len(self._client_cache), cache_key=cache_key[:30])
             return self._client_cache[cache_key]
 
         # Create new client
+        log_event("client_cache_miss", cache_size=len(self._client_cache), cache_key=cache_key[:30])
+
         # Unset SSL_CERT_FILE to avoid certificate path issues in container
         os.environ.pop('SSL_CERT_FILE', None)
         os.environ.pop('REQUESTS_CA_BUNDLE', None)
@@ -68,10 +133,12 @@ class Actor:
         )
 
         self._client_cache[cache_key] = client
+        log_event("client_created", cache_size=len(self._client_cache))
 
         # Evict oldest client if cache is full (LRU)
         if len(self._client_cache) > self._max_client_cache:
             oldest_key, oldest_client = self._client_cache.popitem(last=False)
+            log_event("client_evicted", evicted_key=oldest_key[:30], cache_size=len(self._client_cache))
             # Note: We don't await close() here since it's sync method
             # The client will be garbage collected and connections will eventually close
             # For proper cleanup, consider using async cleanup in Actor.__del__ or cleanup method
@@ -99,7 +166,10 @@ class Actor:
             params["seed"] = seed
 
         # Create stream (httpx client already has 20s read timeout configured)
+        log_event("stream_creating")
+        stream_start = time.time()
         stream = await client.chat.completions.create(**params)
+        log_event("stream_created")
 
         # Collect streamed content and usage
         content_parts = []
@@ -109,6 +179,10 @@ class Actor:
         max_chunks = 32000  # Limit output to ~32k tokens (assuming ~1 chunk per token)
         chunk_timeout = 30.0  # Max time between chunks
 
+        first_chunk_received = False
+        last_chunk_time = time.time()
+        max_chunk_interval = 0.0
+
         try:
             # Create async iterator from stream
             chunk_iter = stream.__aiter__()
@@ -116,10 +190,25 @@ class Actor:
             while True:
                 try:
                     # Wait for next chunk with timeout
+                    chunk_receive_start = time.time()
                     chunk = await asyncio.wait_for(chunk_iter.__anext__(), timeout=chunk_timeout)
+                    chunk_receive_time = time.time()
+
+                    # Track first chunk (TTFB)
+                    if not first_chunk_received:
+                        ttfb_ms = int((chunk_receive_time - stream_start) * 1000)
+                        log_event("first_chunk_received", ttfb_ms=ttfb_ms)
+                        first_chunk_received = True
+
+                    # Track chunk interval
+                    chunk_interval = chunk_receive_time - last_chunk_time
+                    max_chunk_interval = max(max_chunk_interval, chunk_interval)
+                    last_chunk_time = chunk_receive_time
+
                 except StopAsyncIteration:
                     break
                 except asyncio.TimeoutError:
+                    log_event("stream_chunk_timeout", level='error', timeout_seconds=chunk_timeout, chunks_received=chunk_count)
                     raise TimeoutError(f"Stream timeout: no chunk received for {chunk_timeout}s")
 
                 chunk_count += 1
@@ -148,12 +237,22 @@ class Actor:
             if not content_parts:
                 # Return None for empty content (e.g., token limit exhausted during reasoning)
                 # This will result in 0 score rather than raising an error
+                log_event("stream_empty_content", level='warning', chunks=chunk_count)
                 return None, usage
 
             content = "".join(content_parts)
             if not content:
                 # Return None for empty content (e.g., token limit exhausted during reasoning)
+                log_event("stream_empty_content", level='warning', chunks=chunk_count)
                 return None, usage
+
+            # Log stream completion stats
+            stream_duration_ms = int((time.time() - stream_start) * 1000)
+            log_event("stream_complete",
+                     total_chunks=chunk_count,
+                     content_length=len(content),
+                     stream_duration_ms=stream_duration_ms,
+                     max_chunk_interval_ms=int(max_chunk_interval * 1000))
 
             # Return both content and usage information
             return content.strip(), usage
@@ -162,16 +261,17 @@ class Actor:
             # Critical: Close stream to return connection to pool
             # Use timeout protection to avoid hanging on close
             try:
+                close_start = time.time()
                 await asyncio.wait_for(stream.response.aclose(), timeout=5.0)
+                close_duration_ms = int((time.time() - close_start) * 1000)
+                log_event("stream_closed", close_duration_ms=close_duration_ms)
             except asyncio.TimeoutError:
                 # If close hangs, log and continue to avoid blocking error propagation
                 # The connection will be cleaned up by garbage collector
-                import logging
-                logging.warning("Stream close timed out after 5s, connection may leak")
+                log_event("stream_close_timeout", level='warning', timeout_seconds=5.0)
             except Exception as e:
                 # Best effort cleanup - don't let close failure block error propagation
-                import logging
-                logging.debug(f"Stream close failed: {e}")
+                log_event("stream_close_failed", level='warning', error=str(e))
 
     async def evaluate(
         self,
@@ -212,101 +312,128 @@ class Actor:
         # Allow per-call api_key override
         current_api_key = api_key or self.api_key
 
+        # Decode task_type for logging
+        try:
+            from logic_task_v2 import LogicTaskV2
+            task_type, actual_seed = LogicTaskV2.decode_task_id(task_id)
+        except:
+            task_type = "unknown"
+            actual_seed = task_id
+
         start = time.time()
 
-        # Generate challenge using task_id (auto-detects task type)
-        try:
-            challenge = await self.logic_task.generate(task_id=task_id)
-        except ValueError as e:
-            # Only catch expected generation failures
-            if "Failed to generate valid sequence" in str(e):
-                import traceback
-                # Try to decode task_type for task_name
-                try:
-                    from logic_task_v2 import LogicTaskV2
-                    task_type, seed = LogicTaskV2.decode_task_id(task_id)
-                    task_name = f"logic-v2:{task_type}"
-                except:
-                    task_type = "unknown"
-                    seed = task_id
-                    task_name = "logic-v2:unknown"
-
-                # Return 0 score with same format as success, failure info in conversation
-                error_message = f"Task generation failed: {str(e)}"
-                conversation = [
-                    {"role": "system", "content": error_message},
-                    {"role": "assistant", "content": None}
-                ]
-
-                return {
-                    "task_name": task_name,
-                    "score": 0.0,
-                    "success": True,  # Hide failure from external view
-                    "time_taken": time.time() - start,
-                    "extra": {
-                        "conversation": conversation,
-                        "task_id": task_id,
-                        "task_type": task_type,
-                        "seed": seed,
-                        "task_metadata": {
-                            "generation_failed": True,
-                            "generation_error": str(e),
-                            "generation_traceback": traceback.format_exc()
-                        },
-                        "usage": None
-                    }
-                }
-            else:
-                # Other ValueErrors are unexpected, let them propagate
-                raise
-
-        # Call LLM using task_id as seed
-        usage = None
-        try:
-            resp, usage = await self._llm_chat(challenge.prompt, model, base_url, timeout, temperature, current_api_key, task_id)
-            error = None
-        except Exception as e:
-            import traceback
-            resp = None
-            error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
-
-        # Evaluate
-        score = 0.0
-        if resp:
+        # Create request logger context
+        with RequestLogger(
+            task_id=task_id,
+            task_type=task_type,
+            seed=actual_seed,
+            model=model,
+            base_url=base_url
+        ):
+            # Generate challenge using task_id (auto-detects task type)
             try:
-                score = await self.logic_task.evaluate(resp, challenge)
+                challenge = await self.logic_task.generate(task_id=task_id)
+                log_event("challenge_generated")
+            except ValueError as e:
+                # Only catch expected generation failures
+                if "Failed to generate valid sequence" in str(e):
+                    import traceback
+                    log_event("challenge_generation_failed", level='error', error=str(e))
+
+                    # Try to decode task_type for task_name
+                    try:
+                        from logic_task_v2 import LogicTaskV2
+                        task_type, seed = LogicTaskV2.decode_task_id(task_id)
+                        task_name = f"logic-v2:{task_type}"
+                    except:
+                        task_type = "unknown"
+                        seed = task_id
+                        task_name = "logic-v2:unknown"
+
+                    # Return 0 score with same format as success, failure info in conversation
+                    error_message = f"Task generation failed: {str(e)}"
+                    conversation = [
+                        {"role": "system", "content": error_message},
+                        {"role": "assistant", "content": None}
+                    ]
+
+                    return {
+                        "task_name": task_name,
+                        "score": 0.0,
+                        "success": True,  # Hide failure from external view
+                        "time_taken": time.time() - start,
+                        "extra": {
+                            "conversation": conversation,
+                            "task_id": task_id,
+                            "task_type": task_type,
+                            "seed": seed,
+                            "task_metadata": {
+                                "generation_failed": True,
+                                "generation_error": str(e),
+                                "generation_traceback": traceback.format_exc()
+                            },
+                            "usage": None
+                        }
+                    }
+                else:
+                    # Other ValueErrors are unexpected, let them propagate
+                    raise
+
+            # Call LLM using task_id as seed
+            log_event("llm_call_start")
+            usage = None
+            try:
+                resp, usage = await self._llm_chat(challenge.prompt, model, base_url, timeout, temperature, current_api_key, task_id)
+                error = None
+                log_event("llm_call_complete", response_length=len(resp) if resp else 0)
             except Exception as e:
                 import traceback
-                error = f"Evaluation error: {type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+                resp = None
+                error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+                log_event("llm_call_failed", level='error', error=str(e), error_type=type(e).__name__)
 
-        conversation = [
-            {"role": "user", "content": challenge.prompt},
-            {"role": "assistant", "content": resp}
-        ]
+            # Evaluate
+            log_event("evaluation_start")
+            score = 0.0
+            if resp:
+                try:
+                    score = await self.logic_task.evaluate(resp, challenge)
+                    log_event("evaluation_complete", score=score)
+                except Exception as e:
+                    import traceback
+                    error = f"Evaluation error: {type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+                    log_event("evaluation_failed", level='error', error=str(e))
 
-        task_type = challenge.extra.get("task_type")
+            conversation = [
+                {"role": "user", "content": challenge.prompt},
+                {"role": "assistant", "content": resp}
+            ]
 
-        result = {
-            "task_name": f"logic-v2:{task_type}",
-            "score": score,
-            "success": score > 0,
-            "time_taken": time.time() - start,
-            "extra": {
-                "conversation": conversation,
-                "task_id": task_id,
-                "task_type": task_type,
-                "seed": challenge.extra.get("seed"),
-                "task_metadata": challenge.extra.get("metadata", {}),
-                "usage": usage
+            task_type = challenge.extra.get("task_type")
+
+            result = {
+                "task_name": f"logic-v2:{task_type}",
+                "score": score,
+                "success": score > 0,
+                "time_taken": time.time() - start,
+                "extra": {
+                    "conversation": conversation,
+                    "task_id": task_id,
+                    "task_type": task_type,
+                    "seed": challenge.extra.get("seed"),
+                    "task_metadata": challenge.extra.get("metadata", {}),
+                    "usage": usage
+                }
             }
-        }
 
-        # Add error info if present
-        if error:
-            result["error"] = error
-            result["error_type"] = "llm_failure"
+            # Add error info if present
+            if error:
+                result["error"] = error
+                result["error_type"] = "llm_failure"
 
-        # Force garbage collection to free memory immediately
-        gc.collect()
+            log_event("request_complete", score=score, success=score > 0, total_time_ms=int((time.time() - start) * 1000))
 
-        return result
+            # Force garbage collection to free memory immediately
+            gc.collect()
+
+            return result
