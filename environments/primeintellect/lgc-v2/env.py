@@ -42,16 +42,22 @@ except ImportError:
     _request_logger: ContextVar = ContextVar('request_logger', default=None)
 
     class RequestLogger:
-        def __init__(self, task_id, task_type, seed, model, base_url, game=None, trace=None):
+        def __init__(self, **context):
             import re
             self.start_time = time.time()
+
+            # Extract fields
+            task_id = context.get('task_id')
+            task_type = context.get('task_type')
+            seed = context.get('seed')
+            model = context.get('model')
+            base_url = context.get('base_url', '')
+
+            # Extract miner from base_url
             slug_match = re.search(r'https?://([^./]+)\.chutes\.ai', base_url)
             miner_slug = slug_match.group(1) if slug_match else base_url[:40]
 
             ctx_parts = [f"task_id:{task_id}", f"type:{task_type}", f"seed:{seed}", f"miner:{miner_slug}", f"model:{model}"]
-            if game: ctx_parts.append(f"game:{game}")
-            if trace: ctx_parts.append(f"trace:{trace}")
-
             self.logger = base_logger.bind(req_ctx="|".join(ctx_parts))
 
         def log(self, event, level='info', **details):

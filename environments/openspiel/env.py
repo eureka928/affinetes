@@ -197,29 +197,20 @@ class Actor:
         current_api_key = api_key or self.api_key
         start_time = time.time()
 
-        # Create request logger context
-        with RequestLogger(
-            task_id=task_id,
-            task_type="openspiel",
-            seed=seed,
-            model=model,
-            base_url=base_url,
-            opponent=opponent
-        ):
-            return await asyncio.wait_for(
-                self._run_evaluation(
-                    task_id,
-                    seed,
-                    model,
-                    base_url,
-                    temperature,
-                    current_api_key,
-                    opponent,
-                    start_time,
-                    timeout,
-                ),
-                timeout=timeout,
-            )
+        return await asyncio.wait_for(
+            self._run_evaluation(
+                task_id,
+                seed,
+                model,
+                base_url,
+                temperature,
+                current_api_key,
+                opponent,
+                start_time,
+                timeout,
+            ),
+            timeout=timeout,
+        )
 
     async def _run_evaluation(
         self,
@@ -246,66 +237,93 @@ class Actor:
         try:
             game, game_config = create_game(task_id)
             game_name = game_config["game_name"]
-            log_event("game_created", game_name=game_name)
 
-            num_players = game.num_players()
-            llm_player_id = llm_player_id % num_players
-
-            # Get agent for this game
-            agent_class = GAME_AGENTS.get(game_name)
-            if not agent_class:
-                raise ValueError(f"No agent found for game: {game_name}")
-
-            agent = agent_class()
-
-            llm_bot = LLMBot(
-                game=game,
-                player_id=llm_player_id,
-                base_url=base_url,
-                api_key=current_api_key,
-                model=model,
-                temperature=temperature,
-                rng_seed=seed + 1,
-                agent=agent,
+            # Create request logger context after game_name is determined
+            with RequestLogger(
+                task_id=task_id,
+                task_type=game_name,
                 seed=seed,
-                executor=self.executor,
-            )
+                model=model,
+                base_url=base_url,
+                opponent=opponent
+            ):
+                log_event("game_created", game_name=game_name)
 
-            # Create bots for all players
-            bots = []
-            for player_id in range(num_players):
-                if player_id == llm_player_id:
-                    bots.append(llm_bot)
-                else:
-                    opponent_bot = self._create_opponent_bot(
-                        opponent, player_id, seed + 2 + player_id, game, agent
-                    )
-                    # Track TimedMCTSBot instances
-                    if isinstance(opponent_bot, TimedMCTSBot):
-                        mcts_bots.append(opponent_bot)
-                    bots.append(opponent_bot)
+                num_players = game.num_players()
+                llm_player_id = llm_player_id % num_players
 
-            loop = asyncio.get_event_loop()
+                # Get agent for this game
+                agent_class = GAME_AGENTS.get(game_name)
+                if not agent_class:
+                    raise ValueError(f"No agent found for game: {game_name}")
 
-            log_event("game_start", num_players=num_players, llm_player_id=llm_player_id)
+                agent = agent_class()
 
-            # Run game evaluation with internal timeout (20s buffer before task timeout)
-            try:
-                returns = await asyncio.wait_for(
-                    loop.run_in_executor(
-                        self.executor,
-                        evaluate_bots.evaluate_bots,
-                        game.new_initial_state(),
-                        bots,
-                        np.random.RandomState(seed),
-                    ),
-                    timeout=internal_timeout
+                llm_bot = LLMBot(
+                    game=game,
+                    player_id=llm_player_id,
+                    base_url=base_url,
+                    api_key=current_api_key,
+                    model=model,
+                    temperature=temperature,
+                    rng_seed=seed + 1,
+                    agent=agent,
+                    seed=seed,
+                    executor=self.executor,
                 )
-                log_event("game_complete", returns=str(returns))
-            except asyncio.TimeoutError:
-                # Internal timeout - game didn't complete in time
-                log_event("game_timeout", level='warning', timeout_seconds=internal_timeout)
-                elapsed = time.time() - start_time
+
+                # Create bots for all players
+                bots = []
+                for player_id in range(num_players):
+                    if player_id == llm_player_id:
+                        bots.append(llm_bot)
+                    else:
+                        opponent_bot = self._create_opponent_bot(
+                            opponent, player_id, seed + 2 + player_id, game, agent
+                        )
+                        # Track TimedMCTSBot instances
+                        if isinstance(opponent_bot, TimedMCTSBot):
+                            mcts_bots.append(opponent_bot)
+                        bots.append(opponent_bot)
+
+                loop = asyncio.get_event_loop()
+
+                log_event("game_start", num_players=num_players, llm_player_id=llm_player_id)
+
+                # Run game evaluation with internal timeout (20s buffer before task timeout)
+                try:
+                    returns = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            self.executor,
+                            evaluate_bots.evaluate_bots,
+                            game.new_initial_state(),
+                            bots,
+                            np.random.RandomState(seed),
+                        ),
+                        timeout=internal_timeout
+                    )
+                    log_event("game_complete", returns=str(returns))
+                except asyncio.TimeoutError:
+                    # Internal timeout - game didn't complete in time
+                    log_event("game_timeout", level='warning', timeout_seconds=internal_timeout)
+                    elapsed = time.time() - start_time
+                    return self._build_result(
+                        game_name=game_name,
+                        llm_player_id=llm_player_id,
+                        task_id=task_id,
+                        seed=seed,
+                        opponent=opponent,
+                        start_time=start_time,
+                        error=f"Game incomplete: timeout after {elapsed:.1f}s (limit: {task_timeout}s)",
+                        llm_bot=llm_bot,
+                        mcts_bots=mcts_bots,
+                    )
+
+                # Game completed successfully
+                llm_return = returns[llm_player_id]
+                score = self._compute_score(returns, llm_player_id, game)
+                log_event("request_complete", score=score, llm_return=llm_return)
+
                 return self._build_result(
                     game_name=game_name,
                     llm_player_id=llm_player_id,
@@ -313,30 +331,13 @@ class Actor:
                     seed=seed,
                     opponent=opponent,
                     start_time=start_time,
-                    error=f"Game incomplete: timeout after {elapsed:.1f}s (limit: {task_timeout}s)",
+                    score=score,
+                    llm_return=llm_return,
+                    all_returns=returns,
+                    error=llm_bot.get_last_error() if llm_bot else None,
                     llm_bot=llm_bot,
                     mcts_bots=mcts_bots,
                 )
-
-            # Game completed successfully
-            llm_return = returns[llm_player_id]
-            score = self._compute_score(returns, llm_player_id, game)
-            log_event("request_complete", score=score, llm_return=llm_return)
-
-            return self._build_result(
-                game_name=game_name,
-                llm_player_id=llm_player_id,
-                task_id=task_id,
-                seed=seed,
-                opponent=opponent,
-                start_time=start_time,
-                score=score,
-                llm_return=llm_return,
-                all_returns=returns,
-                error=llm_bot.get_last_error() if llm_bot else None,
-                llm_bot=llm_bot,
-                mcts_bots=mcts_bots,
-            )
 
         except asyncio.TimeoutError:
             # Task timeout
@@ -370,7 +371,7 @@ class Actor:
                     llm_bot=llm_bot,
                     mcts_bots=mcts_bots,
                 )
-            
+
             # APIError or other exceptions: record as error
             if isinstance(e, APIError):
                 error_msg = llm_bot.get_last_error() if llm_bot and llm_bot.get_last_error() else str(e)
