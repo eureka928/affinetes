@@ -41,7 +41,7 @@ class LLMBot(pyspiel.Bot):
         base_url: str,
         api_key: str,
         model: str,
-        temperature: float,
+        temperature: Optional[float],
         rng_seed: int,
         agent: BaseGameAgent,
         seed: Optional[int] = None,
@@ -57,7 +57,7 @@ class LLMBot(pyspiel.Bot):
             base_url: LLM API base URL
             api_key: API authentication key
             model: Model name
-            temperature: Sampling temperature
+            temperature: Sampling temperature (None = use model default)
             rng_seed: Random seed for fallback action selection
             agent: BaseGameAgent for game-specific logic (REQUIRED)
             seed: Random seed for LLM API reproducibility
@@ -240,10 +240,12 @@ class LLMBot(pyspiel.Bot):
             params = {
                 "model": self._model,
                 "messages": self._conversation,
-                "temperature": self._temperature,
                 "stream": True,
                 "stream_options": {"include_usage": True}
             }
+            
+            if self._temperature is not None:
+                params["temperature"] = self._temperature
             
             if self._seed is not None:
                 params["seed"] = self._seed

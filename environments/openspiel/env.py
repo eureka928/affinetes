@@ -160,7 +160,7 @@ class Actor:
         model: str = "deepseek-ai/DeepSeek-V3",
         base_url: str = "https://llm.chutes.ai/v1",
         timeout: int = 1800,
-        temperature: float = 0.7,
+        temperature: float = None,
         api_key: str = None,
         opponent: str = "mcts",
     ):
@@ -173,7 +173,7 @@ class Actor:
             model: LLM model name
             base_url: LLM API base URL
             timeout: Overall task timeout in seconds (default 1800s = 30min)
-            temperature: LLM temperature
+            temperature: LLM temperature (None = use model default)
             api_key: Override API key
             opponent: Opponent type ("random" or "mcts")
         """
@@ -567,6 +567,7 @@ class Actor:
                 "conversation": conversation,
                 "action_history": action_history,
                 "observation": observation,
+                "task_type": game_name,
                 "game_name": game_name,
                 "task_id": task_id,
                 "seed": seed,

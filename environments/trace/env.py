@@ -54,10 +54,13 @@ class Actor:
         params = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": temperature,
             "stream": True,
             "stream_options": {"include_usage": True}
         }
+        
+        # Add temperature if provided
+        if temperature is not None:
+            params["temperature"] = temperature
         
         # Add seed if provided
         if seed is not None:
@@ -106,7 +109,7 @@ class Actor:
         model="deepseek-ai/DeepSeek-V3",
         base_url="https://llm.chutes.ai/v1",
         timeout=600,
-        temperature=0.7,
+        temperature=None,
         api_key: str = None,
         seed: int = None,
         task_id: int = None
@@ -118,7 +121,7 @@ class Actor:
             model: Model name to use for evaluation
             base_url: Base URL for LLM API
             timeout: Timeout for LLM API calls
-            temperature: Temperature for LLM generation
+            temperature: Temperature for LLM generation (None = use model default)
             api_key: Override API key for this evaluation. If not provided, uses instance api_key
             seed: Random seed for LLM generation. Used to ensure reproducible results. If not provided, a random seed will be generated.
             task_id: Optional task ID for deterministic task selection.

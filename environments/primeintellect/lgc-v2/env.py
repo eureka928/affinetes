@@ -97,10 +97,13 @@ class Actor:
         params = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": temperature,
             "stream": True,
             "stream_options": {"include_usage": True}
         }
+
+        # Add temperature if provided
+        if temperature is not None:
+            params["temperature"] = temperature
 
         # Add seed if provided
         if seed is not None:
@@ -211,7 +214,7 @@ class Actor:
         model="deepseek-ai/DeepSeek-V3",
         base_url="https://llm.chutes.ai/v1",
         timeout=600,
-        temperature=0.7,
+        temperature=None,
         api_key: str = None,
         task_id: int = None,
         seed: int = None,
