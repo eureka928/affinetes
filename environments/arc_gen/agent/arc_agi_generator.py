@@ -39,7 +39,7 @@ class ARC2Generator:
         task_num: Optional[int] = None,
         rng = None,
     ) -> Dict[str, Any]:
-        max_retry = 1
+        max_retry = 10
         while max_retry > 0:
             try:
                 """
