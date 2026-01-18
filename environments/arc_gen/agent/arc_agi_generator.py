@@ -26,7 +26,7 @@ class ARC2Generator:
         self,
         max_chain_length: int = 4,
         max_grid_size: int = 30,
-        task_range: int=10
+        task_range: int=100_000_000
     ):
         self.max_chain_length = max_chain_length
         self.max_grid_size = max_grid_size
@@ -35,7 +35,7 @@ class ARC2Generator:
         self.min_distinct_colors = 2
         self.min_non_black_cells = 6
         self.max_resample_attempts = 4
-        self.task_range = 100_000_000
+        self.task_range = task_range
     def generate_initial_problem(
         self,
         task_num: Optional[int] = None,
