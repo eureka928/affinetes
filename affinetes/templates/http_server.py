@@ -14,9 +14,34 @@ import asyncio
 import inspect
 import sys
 import traceback
+import dataclasses
 from typing import Any, Optional, List
 
 app = FastAPI(title="affinetes HTTP Server")
+
+
+def _serialize_result(result: Any) -> Any:
+    """Serialize result to JSON-compatible format.
+
+    Handles:
+    - dataclass instances (e.g., OpenEnvResponse)
+    - objects with to_dict() method
+    - plain dicts and primitives
+    """
+    if result is None:
+        return None
+    if dataclasses.is_dataclass(result) and not isinstance(result, type):
+        # Convert dataclass to dict
+        return dataclasses.asdict(result)
+    if hasattr(result, "to_dict") and callable(result.to_dict):
+        return result.to_dict()
+    if hasattr(result, "model_dump") and callable(result.model_dump):
+        # Pydantic v2
+        return result.model_dump()
+    if hasattr(result, "dict") and callable(result.dict):
+        # Pydantic v1
+        return result.dict()
+    return result
 
 # User module will be loaded at runtime
 user_module = None
@@ -157,7 +182,7 @@ def _create_method_route(method_name: str):
                 loop = asyncio.get_event_loop()
                 result = await loop.run_in_executor(None, lambda: func(*args, **kwargs))
 
-            return MethodResponse(status="success", result=result)
+            return MethodResponse(status="success", result=_serialize_result(result))
         except Exception as e:
             tb = traceback.format_exc()
             raise HTTPException(500, f"{str(e)}\n{tb}")
@@ -212,7 +237,7 @@ async def call_method(call: MethodCall):
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(None, lambda: func(*call.args, **call.kwargs))
 
-        return MethodResponse(status="success", result=result)
+        return MethodResponse(status="success", result=_serialize_result(result))
     except Exception as e:
         tb = traceback.format_exc()
         raise HTTPException(500, f"{str(e)}\n{tb}")

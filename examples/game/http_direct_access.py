@@ -57,22 +57,19 @@ async def main():
         methods_info = resp.json()
         print(f"    GET /methods -> {json.dumps(methods_info, indent=4)}")
 
-        # 3. Call reset using SDK-style endpoint (/call)
-        print("\n[3] Reset via /call (SDK style)")
+        # 3. Reset game via RESTful endpoint
+        print("\n[3] Reset via /reset")
         resp = await client.post(
-            f"{base_url}/call",
-            json={
-                "method": "reset",
-                "kwargs": {"task_id": 42, "seed": 123}
-            }
+            f"{base_url}/reset",
+            json={"task_id": 42, "seed": 123}
         )
         result = resp.json()
         episode_id = result["result"]["episode_id"]
-        print(f"    POST /call -> episode_id={episode_id}")
+        print(f"    POST /reset -> episode_id={episode_id}")
         print(f"    observation: {result['result']['observation'][:100]}...")
 
-        # 4. Call step using RESTful-style endpoint (POST /{method_name})
-        print("\n[4] Step via /step (RESTful style)")
+        # 4. Step via RESTful endpoint
+        print("\n[4] Step via /step")
         resp = await client.post(
             f"{base_url}/step",
             json={
@@ -113,7 +110,7 @@ async def main():
             print(f"    Guess {guess}: reward={result['result']['reward']}, done={result['result']['done']}")
 
         # 6. Stop the episode
-        print("\n[6] Stop via /stop (RESTful style)")
+        print("\n[6] Stop via /stop")
         resp = await client.post(
             f"{base_url}/stop",
             json={"episode_id": episode_id}

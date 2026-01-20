@@ -28,7 +28,7 @@ from base_agent import BaseGameAgent
 # Import shared logging utilities
 from request_logger import RequestLogger, log_event
 
-from affinetes.core.openenv import ResetRequest, StepRequest, OpenEnvResponse
+from affinetes.core.openenv import OpenEnvResponse
 
 
 @dataclass
@@ -230,18 +230,18 @@ class Actor:
         done: bool = False,
         truncated: bool = False,
         info: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Build OpenEnv response dictionary"""
+    ) -> OpenEnvResponse:
+        """Build OpenEnv response"""
         if episode_id:
             self._last_observations[episode_id] = observation
         return OpenEnvResponse(
-            episode_id=episode_id,
             observation=observation,
             reward=reward,
             done=done,
             truncated=truncated,
+            episode_id=episode_id,
             info=info,
-        ).model_dump()
+        )
 
     def _format_observation(self, ep: EpisodeState, include_legal_actions: bool = True) -> str:
         """Format current game state as observation text for LLM"""
@@ -421,34 +421,24 @@ class Actor:
 
     async def reset(
         self,
-        request: Optional[Dict[str, Any]] = None,
         task_id: Optional[int] = None,
         seed: Optional[int] = None,
-        kwargs: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        opponent: str = "mcts",
+    ) -> OpenEnvResponse:
         """
         Reset environment and start a new game episode.
 
         Args:
-            request: Full request dict (alternative to individual params)
             task_id: Task identifier (encodes game type and config)
             seed: Random seed for reproducibility
-            kwargs: Additional parameters (e.g., opponent="mcts")
+            opponent: Opponent type ("random" or "mcts", default: "mcts")
 
         Returns:
-            OpenEnv response with initial observation
+            OpenEnvResponse with initial observation
         """
-        if request is None:
-            request = {"task_id": task_id, "seed": seed, "kwargs": kwargs}
-        rr = ResetRequest.model_validate(request)
-
-        # Resolve seed and task_id
-        resolved_seed = rr.seed if rr.seed is not None else random.randint(0, 2**32 - 1)
-        resolved_task_id = int(rr.task_id) if rr.task_id is not None else random.randint(0, 10**11 - 1)
-
-        # Get opponent type from kwargs
-        rkw = rr.kwargs or {}
-        opponent_type = rkw.get("opponent", "mcts")
+        resolved_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
+        resolved_task_id = int(task_id) if task_id is not None else random.randint(0, 10**11 - 1)
+        opponent_type = opponent
 
         # Create game from task_id
         game, game_config = create_game(resolved_task_id)
@@ -532,29 +522,21 @@ class Actor:
 
     async def step(
         self,
-        request: Optional[Dict[str, Any]] = None,
-        action: Optional[str] = None,
+        action: str,
         episode_id: Optional[str] = None,
-        kwargs: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    ) -> OpenEnvResponse:
         """
         Execute an action in the current game.
 
         Args:
-            request: Full request dict (alternative to individual params)
             action: Action string (should contain action ID)
-            episode_id: Episode identifier for verification
-            kwargs: Additional parameters
+            episode_id: Episode identifier
 
         Returns:
-            OpenEnv response with observation, reward, done status
+            OpenEnvResponse with observation, reward, done status
         """
-        if request is None:
-            request = {"action": action, "episode_id": episode_id, "kwargs": kwargs}
-        sr = StepRequest.model_validate(request)
-
         # Validate episode_id is provided
-        if not sr.episode_id:
+        if not episode_id:
             return self._resp(
                 "No episode_id provided. Call reset() first to get an episode_id.",
                 episode_id=None,
@@ -564,14 +546,14 @@ class Actor:
             )
 
         # Look up episode from concurrent episodes dict
-        ep = self._episodes.get(sr.episode_id)
+        ep = self._episodes.get(episode_id)
         if not ep:
             return self._resp(
-                f"Episode not found: {sr.episode_id}. Call reset() to start a new episode.",
-                episode_id=sr.episode_id,
+                f"Episode not found: {episode_id}. Call reset() to start a new episode.",
+                episode_id=episode_id,
                 done=True,
                 truncated=True,
-                info=self._info(None, error={"type": "episode_not_found", "message": f"Episode {sr.episode_id} not found.", "retryable": True}),
+                info=self._info(None, error={"type": "episode_not_found", "message": f"Episode {episode_id} not found.", "retryable": True}),
             )
 
         # Check if episode already done
@@ -606,7 +588,7 @@ class Actor:
             return self._resp(obs, episode_id=ep.episode_id, reward=final_reward, done=True, info=self._info(ep))
 
         # Parse action from string
-        parsed_action = self._parse_action(sr.action, legal_actions)
+        parsed_action = self._parse_action(action, legal_actions)
         if parsed_action is None:
             # Invalid action - return error but don't end episode
             actions_desc = []
@@ -619,7 +601,7 @@ class Actor:
             if len(legal_actions) > 10:
                 actions_desc.append(f"  ... and {len(legal_actions) - 10} more")
 
-            obs = f"""Invalid action: "{sr.action}"
+            obs = f"""Invalid action: "{action}"
 
 Could not parse a valid action ID. Please respond with just the action ID number.
 
@@ -684,24 +666,18 @@ Your choice (action ID only):"""
 
     async def state(
         self,
-        request: Optional[Dict[str, Any]] = None,
         episode_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> OpenEnvResponse:
         """
         Get current game state without advancing (no state transition).
 
         Args:
-            request: Request dict
             episode_id: Episode identifier
 
         Returns:
-            Current observation without state change
+            OpenEnvResponse with current observation
         """
-        if request is None:
-            request = {"episode_id": episode_id}
-        req_episode_id = (request or {}).get("episode_id")
-
-        if not req_episode_id:
+        if not episode_id:
             return self._resp(
                 "No episode_id provided. Call reset() first to get an episode_id.",
                 episode_id=None,
@@ -710,15 +686,15 @@ Your choice (action ID only):"""
                 info=self._info(None, error={"type": "no_episode_id", "message": "episode_id is required.", "retryable": True}),
             )
 
-        ep = self._episodes.get(req_episode_id)
+        ep = self._episodes.get(episode_id)
         if not ep:
-            obs = self._last_observations.get(req_episode_id, "Episode not found.")
+            obs = self._last_observations.get(episode_id, "Episode not found.")
             return self._resp(
                 obs,
-                episode_id=req_episode_id,
+                episode_id=episode_id,
                 done=True,
                 truncated=True,
-                info=self._info(None, error={"type": "episode_not_found", "message": f"Episode {req_episode_id} not found.", "retryable": True}),
+                info=self._info(None, error={"type": "episode_not_found", "message": f"Episode {episode_id} not found.", "retryable": True}),
             )
 
         obs = self._format_observation(ep, include_legal_actions=True) if not ep.done else self._format_terminal_observation(ep)
@@ -726,34 +702,28 @@ Your choice (action ID only):"""
 
     async def stop(
         self,
-        request: Optional[Dict[str, Any]] = None,
         episode_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Stop (terminate) the active episode and release resources.
 
         Args:
-            request: Request dict
             episode_id: Episode identifier
 
         Returns:
             Status dictionary
         """
-        if request is None:
-            request = {"episode_id": episode_id}
-        req_episode_id = (request or {}).get("episode_id")
-
-        if not req_episode_id:
+        if not episode_id:
             return {"status": "ok", "stopped": False, "message": "No episode_id provided"}
 
         # Remove from concurrent episodes dict
-        ep = self._episodes.pop(req_episode_id, None)
-        self._last_observations.pop(req_episode_id, None)
+        ep = self._episodes.pop(episode_id, None)
+        self._last_observations.pop(episode_id, None)
 
         if not ep:
-            return {"status": "ok", "stopped": False, "message": f"Episode {req_episode_id} not found"}
+            return {"status": "ok", "stopped": False, "message": f"Episode {episode_id} not found"}
 
-        return {"status": "ok", "stopped": True, "episode_id": req_episode_id}
+        return {"status": "ok", "stopped": True, "episode_id": episode_id}
 
     # ========== Original Evaluation Interface ==========
 

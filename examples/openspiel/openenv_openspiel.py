@@ -86,7 +86,6 @@ async def main():
     image_tag = af.build_image_from_env(
         env_path="environments/openspiel",
         image_tag="openspiel:training",
-        quiet=False,
     )
 
     print(f"Loading environment...")
