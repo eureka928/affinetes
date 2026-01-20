@@ -342,24 +342,24 @@ TRANSFORMATIONS = {
     'flip_antidiagonal': (flip_antidiagonal, {'type': 'geometric', 'preserves_size': False}),
 
     # Spatial - for positional reasoning
-    'shift': (shift, {'type': 'spatial', 'preserves_size': True}),
+    # 'shift': (shift, {'type': 'spatial', 'preserves_size': True}),
     'recenter': (recenter, {'type': 'spatial', 'preserves_size': True}),
 
     # Scale - adds complexity through size changes
     'zoom_2x': (zoom_2x, {'type': 'scale', 'preserves_size': False}),
     'zoom_3x': (zoom_3x, {'type': 'scale', 'preserves_size': False}),
-    'downsample_2x': (downsample_2x, {'type': 'scale', 'preserves_size': False}),
+    # 'downsample_2x': (downsample_2x, {'type': 'scale', 'preserves_size': False}),
 
     # Color - for multi-rule compositional reasoning
     'swap_colors': (swap_colors, {'type': 'color', 'preserves_size': True}),
-    'remove_color': (remove_color, {'type': 'color', 'preserves_size': True}),
+    # 'remove_color': (remove_color, {'type': 'color', 'preserves_size': True}),
     # 'highlight_color': (highlight_color, {'type': 'color', 'preserves_size': True}),
 
     # Physics - intuitive for humans, adds predictability
-    'gravity_down': (gravity_down, {'type': 'physics', 'preserves_size': True}),
-    'gravity_up': (gravity_up, {'type': 'physics', 'preserves_size': True}),
-    'gravity_left': (gravity_left, {'type': 'physics', 'preserves_size': True}),
-    'gravity_right': (gravity_right, {'type': 'physics', 'preserves_size': True}),
+    # 'gravity_down': (gravity_down, {'type': 'physics', 'preserves_size': True}),
+    # 'gravity_up': (gravity_up, {'type': 'physics', 'preserves_size': True}),
+    # 'gravity_left': (gravity_left, {'type': 'physics', 'preserves_size': True}),
+    # 'gravity_right': (gravity_right, {'type': 'physics', 'preserves_size': True}),
 
 }
 
