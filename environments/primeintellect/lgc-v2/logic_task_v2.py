@@ -1,6 +1,5 @@
 """Logic Task V2 - Seed-based task generator"""
 
-from email.mime import text
 import sys
 sys.path.insert(0, '/app')
 
