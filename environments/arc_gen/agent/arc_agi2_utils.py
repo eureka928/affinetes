@@ -16,13 +16,15 @@ def get_grid_size(grid: List[List[int]]) -> Tuple[int, int]:
     return len(grid), len(grid[0]) if grid else 0
 
 
-def is_valid_grid(grid: List[List[int]]) -> bool:
+def is_valid_grid(grid: List[List[int]] , max_size = 30) -> bool:
     """Check if grid is valid (non-empty, rectangular, valid colors 0-9)."""
     if not grid or not grid[0]:
         return False
     width = len(grid[0])
+    if width > max_size:
+        return False
     for row in grid:
-        if len(row) != width:
+        if len(row) != width or len(row) > max_size:
             return False
         for val in row:
             if not isinstance(val, int) or val < 0 or val > 9:
@@ -217,20 +219,10 @@ def downsample_2x(grid: List[List[int]], params: Optional[Dict] = None) -> List[
 
 def swap_colors(grid: List[List[int]], params: Optional[Dict] = None) -> List[List[int]]:
     """Swap two colors in the grid."""
-    palette = list(get_colors_in_grid(grid) - {0})
-    if len(palette) < 2:
+    if params == None:
         return grid
-
-    if params is None:
-        c1, c2 = random.sample(palette, 2)
-    else:
-        c1 = params.get('color1')
-        c2 = params.get('color2')
-        if c1 not in palette:
-            c1 = palette[0]
-        if c2 not in palette or c2 == c1:
-            c2 = next((c for c in palette if c != c1), c1)
-
+    c1 = params.get('color1')
+    c2 = params.get('color2')
     result = deep_copy_grid(grid)
     for r in range(len(result)):
         for c in range(len(result[0])):
