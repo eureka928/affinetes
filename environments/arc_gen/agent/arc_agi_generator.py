@@ -248,9 +248,11 @@ class ARC2Generator:
         # Generate training examples
         train_examples = []
         attempts = 0
-        max_attempts = num_train * 20
+        max_attempts = num_train * 300
         
-        while len(train_examples) < num_train and attempts < max_attempts:
+        is_completed = False
+        limit_degenerate = 0
+        while attempts < max_attempts:
             attempts += 1
             try:
                 base = self.generate_initial_problem(task_num=task_num, rng = rng)
@@ -260,24 +262,29 @@ class ARC2Generator:
                 else:
                     output = base["output"]
                 
-                if attempts > max_attempts - 20  or self._non_degenerate(output):
-                    train_examples.append({
-                        "input": base["input"],
-                        "output": output
-                    })
+                if limit_degenerate > 20 or self._non_degenerate(output):
+                    if len(train_examples) < num_train:
+                        train_examples.append({
+                            "input": base["input"],
+                            "output": output
+                        })
+                    else:
+                        test_base = base
+                        test_output = output
+                        is_completed = True
+                        break
+                else:
+                    limit_degenerate += 1
+                    
             except Exception as e:
-                import traceback
-                error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
-                print("Fail to generate\n", error)
+                if type(e).__name__ != "ValueError":
+                    import traceback
+                    error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+                    print("Fail to generate\n", error)
         
-        if len(train_examples) != num_train:
-            raise ValueError(f"Fail to generate")
+        if not is_completed:
+            raise ValueError(f"Fail to generate problem.")
         # Generate test example
-        test_base = self.generate_initial_problem(task_num, rng)
-        if chain:
-            test_output = self.apply_transformation_chain(test_base["output"], chain)
-        else:
-            test_output = test_base["output"]
         
         return {
             "train_examples": train_examples,
