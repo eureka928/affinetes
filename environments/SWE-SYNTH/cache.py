@@ -36,6 +36,22 @@ class LocalCache:
     def exists(self, task_id: int) -> bool:
         return self._get_path(task_id).exists()
 
+    def _get_expansion_path(self, instance_id: str) -> Path:
+        return self.cache_dir / "expansion" / f"{instance_id}.json"
+
+    def load_expansion(self, instance_id: str) -> Optional[Dict[str, Any]]:
+        path = self._get_expansion_path(instance_id)
+        if path.exists():
+            with open(path, 'r') as f:
+                return json.load(f)
+        return None
+
+    def save_expansion(self, instance_id: str, data: Dict[str, Any]) -> None:
+        path = self._get_expansion_path(instance_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'w') as f:
+            json.dump(data, f, indent=2, default=str)
+
 
 class R2ReadOnlyCache:
     """
@@ -81,6 +97,19 @@ class R2ReadOnlyCache:
             return response.status_code == 200
         except Exception:
             return False
+
+    def load_expansion(self, instance_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            import httpx
+            key = f"{self.prefix}/expansion/{instance_id}.json"
+            url = f"{self.public_read_url}/{key}"
+            response = httpx.get(url, timeout=30)
+            if response.status_code == 200 and response.content:
+                return response.json()
+            return None
+        except Exception as e:
+            print(f"R2 read error for expansion {instance_id}: {e}")
+            return None
 
 
 class TwoLevelCache:
@@ -129,3 +158,17 @@ class TwoLevelCache:
         if self.r2 and self.r2.exists(task_id):
             return True
         return False
+
+    def load_expansion(self, instance_id: str) -> Optional[Dict[str, Any]]:
+        """Load expansion bug from cache (L1 -> L2)"""
+        data = self.local.load_expansion(instance_id)
+        if data is not None:
+            return data
+
+        if self.r2:
+            data = self.r2.load_expansion(instance_id)
+            if data is not None:
+                self.local.save_expansion(instance_id, data)
+                return data
+
+        return None

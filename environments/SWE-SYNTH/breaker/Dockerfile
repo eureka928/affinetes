@@ -37,6 +37,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy source code and data
 COPY breaker/ ./breaker/
 COPY cache.py ./
+COPY utils.py ./
 COPY ridges/ ./ridges/
 
 ENTRYPOINT ["python", "-m", "breaker.service", \
